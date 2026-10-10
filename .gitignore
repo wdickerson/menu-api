@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.venv/
+package.zip
+.env
+.env.*
+.DS_Store
