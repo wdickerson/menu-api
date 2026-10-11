@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .venv/
 package.zip
+package/
 .env
 .env.*
 .DS_Store

@@ -1,0 +1,146 @@
+{
+  "restaurantName": "Rough & Tumble",
+  "sections": [
+    {
+      "name": "Starters + Shareables",
+      "items": [
+        "Spiced Edamame 9. Steamed edamame, togarashi, sesame oil, maldon sea salt. Vegan, gluten-free.",
+        "R+T Veggie Plate 14. Rotating farm-fresh veggie crudite, R+T herbed ranch dip. Gluten-free.",
+        "Chips + Guac + Salsa 12. Sub gluten-free or celiac-safe tortilla chips 3.",
+        "R&T Chive Kettle Chips + Caramelized Onion Dip 12. House-made chive kettle chips and caramelized onion dip. Sub gluten-free or celiac-safe tortilla chips 3.",
+        "Jackie's Baked Buffalo Dip 16. Creamy jackfruit, charred scallions, vegan mozzarella, Frank's hot sauce, R+T tortilla chips. Sub gluten-free or celiac-safe tortilla chips 3.",
+        "Grilled Zucchini 14. Charred zucchini with lemon, chili flake, and parmesan. Gluten-free and vegan options available.",
+        "Baller Basket O' Fries or Tots 10 or 13."
+      ]
+    },
+    {
+      "name": "R&T Superstars",
+      "items": [
+        "Rough & Tumble Nachos 16 or 28. R+T house-made tortilla chips, cheddar and jack, queso, fresh jalapeno, black beans, pico, black olive, lime crema, salsa roja. Add chicken tinga, carnitas, or Impossible 6. Add guacamole 4. Sub gluten-free or celiac-safe tortilla chips 3.",
+        "Billie Jean King Wings 18. Chicken or zucchini tossed in R+T's famous sriracha and sweet chili wing sauce, plus herbed ranch. Not vegan or gluten-free.",
+        "Ilana Kloss Buffalo Wings 18. Chicken or zucchini tossed in R+T's house buffalo wing sauce, plus blue cheese. Not vegan or gluten-free.",
+        "Knight's Cheese Curds 14. Potato-crusted Wisconsin cheese curds with R&T marinara dipping sauce.",
+        "LJ's Jalapeno Popper Bites 14. Baked poppers with cheddar and jack, cream cheese, and chipotle ranch.",
+        "SYD + TP Fried Pickles 14. Thick sliced dill pickles in beer batter, tartar sauce.",
+        "Hailey's Corn Riblets 14. Hickory smoked corn riblets with chipotle aioli and slaw, named in honor of Washington's own Hailey Van Lith."
+      ]
+    },
+    {
+      "name": "Seasonal Highlights",
+      "items": [
+        "Olo Harvest Salad 20. Arugula, greens, brown rice, cider vinaigrette, roasted squash and apple, candied pecans, beet matchsticks, blue gorgonzola cheese crumbles. Gluten-free. Can be made vegan without blue cheese.",
+        "Jordyn's Poutine 19. Fries, Wisconsin white cheddar curds, cremini and shiitake mushroom gravy, miso garlic king oyster mushroom. Vegetarian, gluten-free.",
+        "Kelsey's Plum Apple Crisp 14. Individual skillet baked shortcake, spiced plum-apple compote, Tillamook vanilla bean ice cream."
+      ]
+    },
+    {
+      "name": "Salads",
+      "items": [
+        "Section note: Add grilled chicken, fried chicken, or marinated tofu 6. Add wild sockeye salmon 8. Add steak 10.",
+        "The Mersladezz 19. Romaine, charred corn, black beans, sweet peppers, Tillamook sharp white cheddar, jalapeno, R&T tortilla chips, poblano ranch. Gluten-free. Make it a wrap 2.",
+        "The Spring Roll, It's Still a Salad, 20. Vermicelli noodles, romaine, Thai basil, mint, cilantro, cucumber, pickled carrots and daikon, red cabbage, sweet peppers, peanut dressing. Vegan and gluten-free available. Contains peanuts. Add lemongrass grilled chicken 7 or grilled tofu 6.",
+        "Olo Harvest Salad 20. Arugula, greens, brown rice, cider vinaigrette, roasted squash and apple, beets, gorgonzola cheese, candied pecans. Gluten-free. Can be made vegan without blue cheese. Add grilled wild sockeye salmon 8.",
+        "Steak Salad 26. Grilled grass-fed New Zealand skirt steak, scallion chimichurri, apple and red onion, cherry tomatoes, cucumber, pickled red onion, spring mix and arugula, soy balsamic.",
+        "The #15 Caesar 19. Kale, cucumber, organic heirloom cherry tomatoes, parmesan, garlic breadcrumbs, charred lemon. Gluten-free optional. Fried chicken, squad fave, or tofu 6. Add wild sockeye salmon 8. Add steak 10. Make it a wrap 2.",
+        "The W Wedge 19. Iceberg, honey-cured bacon, heirloom cherry tomatoes, frizzled onion. Gluten-free optional without onions. Recommended with grilled chicken."
+      ]
+    },
+    {
+      "name": "Mains",
+      "items": [
+        "Section note: Served with choice of fries or house green salad unless noted. Sub tots or kale Caesar 3.",
+        "The Reignstorm Burger 19. Grass-fed beef, stoneground mustard aioli, dill pickle, Tillamook sharp cheddar, heirloom tomato, iceberg, sweet onion, brioche. Sub Jack and Annie's jackfruit patty 3. Add bacon 5, extra patty 7, avocado 4.",
+        "The Celly Burger 21. Juicy chili-infused grass-fed beef patty or R+T's charred black bean and sweet corn patty, grilled poblano, pepper jack, iceberg, sweet onion, heirloom tomato, chipotle aioli, brioche. Extra patty or honey-cured bacon 5. Guacamole 4. Cannot be made vegan or fully gluten-free.",
+        "Jordyn's Poutine 19. Fries, Wisconsin white cheddar curds, cremini and shiitake mushroom gravy, miso garlic king oyster mushroom. Vegetarian, gluten-free.",
+        "Phoebe's Mushroom Miso Grilled Cheese 20. Sharp Tillamook white cheddar, smoked gouda, miso garlic butter, caramelized onions and mushrooms, hot honey, Macrina organic white sourdough, parmesan crust. Pro tip: add bacon 5 or avocado 4.",
+        "The May + Walsh Mac + Cheese 21. Skillet-baked shells, aged white cheddar, smoked gouda, garlic bread crumbs. Sub gluten-free pasta and no bread crumbs 3. Add bacon or grilled chicken 6. No sides.",
+        "The Runner's Rice Bowl 21. Brown rice, slaw, spiced cucumber, mango, edamame, scallions, pickled ginger, wasabi peas, creamy wasabi-ginger dressing, furikake, nori. Choice of gochujang glazed salmon 8, pork belly 8, or soy-marinated tofu 6. Gluten-free available. No sides.",
+        "Fish-El's Fish Tacos 24. Blackened Pacific cod, mango pico de gallo, slaw, jack and cheddar, pineapple habanero salsa, chipotle aioli, soft flour tortilla, served with house tortilla chips. Make it three 9. Sub fries, tots, salad, or gluten-free tortilla chips 3.",
+        "The Bird 20. Fried chicken, slaw, house-made bread and butter pickles, chipotle aioli, brioche. Sub Jack and Annie's jackfruit tenders 3.",
+        "Ji so-YUM's Braised Pork Belly or Tofu Sliders 23. Three soy and ginger braised tofu or pork belly sliders with gochujang glaze, grilled pineapple, scallion slaw, Hawaiian bun. Not served with other sides. Cannot be made gluten-free or vegan.",
+        "The Title IX Banh Mi 21. Garlic-marinated tofu or lemongrass chicken, cucumber, pickled carrot and radish, jalapeno, cilantro, garlic aioli, Thanh Son bakery baguette. Vegan mayo and baguette available.",
+        "The OG B.L.A.T. 20. Bacon, lettuce, avocado, heirloom tomato, garlic aioli, Macrina organic white sourdough.",
+        "The Goat 20. R+T honey-marinated grilled chicken breast, honey and herbed goat cheese, Mama Lil's peppers, arugula, Macrina organic white sourdough.",
+        "The CC Green Chili Tuna Melt 20. Dolphin-safe white albacore, grilled poblano and serrano green chili peppers, red onion, cilantro, Tillamook pepper jack cheese, Macrina organic white sourdough.",
+        "Fishlock + Chips 24. Beer-battered wild-caught Pacific cod, slaw, tartar. Sub salad or tots 3.",
+        "Cierra's Street Tacos 23. Two chicken tinga, pork carnitas, or Impossible tacos, corn tortilla, lettuce, pineapple pico, pickled red onion, salsa verde, lime crema, house tortilla chips. Sub fries, salad, or gluten-free tortilla chips 3. Make it three 7. Add guacamole 4."
+      ]
+    },
+    {
+      "name": "Desserts",
+      "items": [
+        "Kelsey's Plum Apple Crisp 14. Individual skillet baked shortcake, spiced plum-apple compote, Tillamook vanilla bean ice cream.",
+        "Dessert Chips + Dip 14. Cinnamon-sugar sweet potato chips, cheesecake dip topped with Girl Meets Dirt apple preserves, graham cracker crumbles.",
+        "R+T Skillet Cookie a la Mode 13. She has her own following. Brown butter, milk and dark chocolate, oats, flake salt, baked in your very own cast iron skillet and topped with Tillamook vanilla bean ice cream.",
+        "Maya's Gluten-Free S'mores 12. Warm chocolate brownie, toasted R+T marshmallow, graham cracker, salted caramel. Gluten-free."
+      ]
+    },
+    {
+      "name": "Sides",
+      "items": [
+        "Avocado sliced 4.",
+        "Guacamole cup 8.",
+        "Bacon 5.",
+        "Grilled or fried chicken or marinated tofu 6.",
+        "Steak 10.",
+        "Wild sockeye salmon 8.",
+        "Poutine side 8.",
+        "Mac 'n cheese cup 5.",
+        "Side salad 8.",
+        "Grilled zucchini 14.",
+        "Sub gluten-free bread, bun, or pasta 3.",
+        "Sub vegan mayo and baguette, not gluten-free, 3.",
+        "Celiac safe gluten-free corn chips 3.",
+        "Cheeses 2. Tillamook sharp white or medium cheddar, pepper jack, goat, blue.",
+        "Dipping sauces and dressings 1.5. First sauce included with entrees. R+T fry sauce, herbed ranch, tartar, poblano ranch, chipotle aioli, garlic aioli, creamy balsamic, apple cider vinaigrette, barbecue, blue cheese."
+      ]
+    },
+    {
+      "name": "Drinks",
+      "items": [
+        "Section note: Please see drinks menu for our extensive beer, wine, cocktail, and zero proof options.",
+        "Juices. Fresh squeezed orange or grapefruit 7. Cranberry or pineapple 5.",
+        "Organic juice box 5. Apple, grape, fruit punch, pink lemonade.",
+        "Olipop 6. Crisp apple, citrus squeeze, cream soda, strawberry vanilla, or root beer.",
+        "Umbria Coffee drip 5.",
+        "Umbria Coffee cold brew 7.",
+        "Hot tea 4. Black, green, herbal.",
+        "Hot cocoa 5.",
+        "Milk. Whole 4. Chocolate 5.",
+        "Timber City ginger beer 10.",
+        "Shirley Temple 6. Refill 4.",
+        "Lemonade 4.",
+        "Coke, Diet Coke, Sprite, ginger ale, iced tea 4."
+      ]
+    },
+    {
+      "name": "Kids Menu",
+      "items": [
+        "Section note: Limited to kiddos under age 12.",
+        "Championship Cheeseburger 11. Grass-fed beef, Tillamook cheddar cheese, choice of fries, tots, or fresh apple slices. Sub Impossible 2. Gluten-free bun 3.",
+        "Nate's Got the Mac 'n Cheese 11. Shells, Tillamook cheddar cheese sauce. Choice of fries, tots, or fresh apple slices. Sub gluten-free pasta 2.",
+        "A+O's Famous Quesadilla 11. Tillamook jack and cheddar cheese, pico, sour cream, choice of fries, tots, or fresh apple slices. Add grilled chicken, tofu, or Impossible 6.",
+        "Rookie Chicken Bites 11. Fried chicken bites, choice of fries, tots, or fresh apple slices."
+      ]
+    },
+    {
+      "name": "Kids Dessert",
+      "items": [
+        "Little League Ice Cream 6. Single scoop vanilla ice cream and chocolate sauce.",
+        "Little Brownie 7. Mini gluten-free brownie, whipped cream, sprinkles."
+      ]
+    },
+    {
+      "name": "Kids Drinks",
+      "items": [
+        "Juices. Fresh squeezed orange or grapefruit, cranberry, pineapple 5. Organic juice box apple, grape, fruit punch, pink lemonade 5.",
+        "Olipop 6. Crisp apple, citrus squeeze, cream soda, strawberry vanilla, or root beer.",
+        "Shirley Temple 6. Refill 4.",
+        "Lemonade 4.",
+        "Coke, Diet Coke, Sprite, ginger ale 4.",
+        "Hot cocoa 5.",
+        "Milk. Whole 4. Chocolate 5."
+      ]
+    }
+  ]
+}
