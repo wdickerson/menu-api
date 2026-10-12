@@ -147,6 +147,17 @@ Clients should branch on `code`, not message wording.
 | 500 | `internal_error` | Unexpected application error. |
 
 All handler responses include CORS headers and `Cache-Control: no-store`.
+Lambda allows any origin and request headers (`Access-Control-Allow-Origin: *`
+and `Access-Control-Allow-Headers: *`), ignoring `ALLOWED_ORIGIN`. This permits
+non-credentialed requests from a locally running frontend after deploying the API
+code. The frontend's FormData uploads do not require a preflight when sent without
+custom headers. Credentialed browser requests are not supported by wildcard CORS.
+
+CloudFormation templates are unchanged: API Gateway's separate OPTIONS mock and
+gateway-generated errors still use their configured origin. Requests requiring a
+preflight (such as JSON or custom-header requests) can still be blocked from
+localhost by that gateway configuration; Lambda headers cannot override it.
+
 AWS-level rejections (including throttling, oversized invocation events, and
 unsupported routes/methods) use AWS's own response format, not this error envelope.
 

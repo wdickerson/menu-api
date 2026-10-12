@@ -433,9 +433,9 @@ def transcribe(images, context, *, model: str = DEFAULT_MODEL,
 def lambda_handler(event, context):
     headers = {
         "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": os.environ.get("ALLOWED_ORIGIN", "https://menu.littleapp.io"),
+        "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST,OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Headers": "*",
         "Cache-Control": "no-store",
     }
 

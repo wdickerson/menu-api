@@ -95,8 +95,8 @@ class MenuHandlerTests(unittest.TestCase):
         self.last_event = event
         result = handler.lambda_handler(event, context)
         for key, expected in {
-            "Content-Type": "application/json", "Access-Control-Allow-Origin": "https://menu.example.com",
-            "Access-Control-Allow-Methods": "POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type",
+            "Content-Type": "application/json", "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST,OPTIONS", "Access-Control-Allow-Headers": "*",
             "Cache-Control": "no-store",
         }.items():
             self.assertEqual(result["headers"][key], expected)
@@ -310,11 +310,21 @@ class MenuHandlerTests(unittest.TestCase):
             result, _ = self.assert_error(405, "method_not_allowed", method=method)
             self.assertEqual(result["headers"]["Allow"], "POST,OPTIONS")
 
-    def test_default_origin_and_disabled_by_default(self):
+    def test_permissive_origin_and_disabled_by_default(self):
         with patch.dict(os.environ, {}, clear=True):
             result = handler.lambda_handler(upload_event(), None)
-        self.assertEqual(result["headers"]["Access-Control-Allow-Origin"], "https://menu.littleapp.io")
+        self.assertEqual(result["headers"]["Access-Control-Allow-Origin"], "*")
         self.assertEqual(json.loads(result["body"])["error"]["code"], "transcription_disabled")
+        self.openai.assert_not_called()
+        self.aws.assert_not_called()
+
+    def test_any_origin_allowed_despite_configured_origin(self):
+        for origin in ("http://localhost:5173", "http://127.0.0.1:5173", "https://other.example.com", "null"):
+            headers = {"Content-Type": "application/json", "Origin": origin}
+            with self.subTest(origin=origin):
+                result, _ = self.invoke({"dummy": True}, headers=headers)
+                self.assertEqual(result["statusCode"], 200)
+                self.assert_error(400, "invalid_request", payload={"dummy": False}, headers=headers)
         self.openai.assert_not_called()
         self.aws.assert_not_called()
 
