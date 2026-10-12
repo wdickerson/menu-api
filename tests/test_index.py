@@ -74,7 +74,7 @@ class MenuHandlerTests(unittest.TestCase):
     @staticmethod
     def completion(data, finish_reason="stop", refusal=None):
         return {
-            "id": "chatcmpl-test", "object": "chat.completion", "created": 0, "model": "gpt-6-luna",
+            "id": "chatcmpl-test", "object": "chat.completion", "created": 0, "model": "gpt-4.1-mini",
             "choices": [{"index": 0, "finish_reason": finish_reason, "message": {
                 "role": "assistant", "content": json.dumps(data), "refusal": refusal,
             }}],
@@ -118,8 +118,9 @@ class MenuHandlerTests(unittest.TestCase):
         self.assertEqual(str(request.url), "https://api.openai.com/v1/chat/completions")
         self.assertEqual(request.headers["authorization"], "Bearer test-key-not-a-real-secret")
         sent = json.loads(request.content)
-        self.assertEqual(sent["model"], "gpt-6-luna")
-        self.assertEqual(sent["reasoning_effort"], "none")
+        self.assertEqual(sent["model"], "gpt-4.1-mini")
+        self.assertNotIn("reasoning_effort", sent)
+        self.assertEqual(sent["messages"][0], {"role": "system", "content": handler.SYSTEM_PROMPT})
         self.assertFalse(sent["store"])
         self.assertEqual(sent["max_completion_tokens"], 8000)
         self.assertTrue(sent["response_format"]["json_schema"]["strict"])
@@ -332,8 +333,8 @@ class MenuHandlerTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4.1", "OPENAI_REASONING_EFFORT": "high"}):
             self.invoke()
         sent = json.loads(self.requests[-1].content)
-        self.assertEqual(sent["model"], "gpt-6-luna")
-        self.assertEqual(sent["reasoning_effort"], "none")
+        self.assertEqual(sent["model"], "gpt-4.1-mini")
+        self.assertNotIn("reasoning_effort", sent)
 
     def test_request_model_and_effort_overrides(self):
         result, _ = self.invoke(fields=[("model", "gpt-6.1-sol"), ("reasoning_effort", "low")])
@@ -346,37 +347,43 @@ class MenuHandlerTests(unittest.TestCase):
         # Settings never leak into a later request.
         self.invoke()
         sent = json.loads(self.requests[-1].content)
-        self.assertEqual(sent["model"], "gpt-6-luna")
-        self.assertEqual(sent["reasoning_effort"], "none")
+        self.assertEqual(sent["model"], "gpt-4.1-mini")
+        self.assertNotIn("reasoning_effort", sent)
 
     def test_options_default_independently(self):
         for fields, model, effort in (
             ([("model", "gpt-6.1-sol")], "gpt-6.1-sol", "none"),
-            ([("reasoning_effort", "low")], "gpt-6-luna", "low"),
+            ([("reasoning_effort", "none")], "gpt-4.1-mini", None),
         ):
             result, _ = self.invoke(fields=fields)
             self.assertEqual(result["statusCode"], 200)
             sent = json.loads(self.requests[-1].content)
             self.assertEqual(sent["model"], model)
-            self.assertEqual(sent["reasoning_effort"], effort)
+            if effort is None:
+                self.assertNotIn("reasoning_effort", sent)
+            else:
+                self.assertEqual(sent["reasoning_effort"], effort)
 
-    def test_gpt_41_mini_requires_none_and_omits_upstream_parameter(self):
-        result, _ = self.invoke(fields=[("model", "gpt-4.1-mini"), ("reasoning_effort", "none")])
-        self.assertEqual(result["statusCode"], 200)
-        sent = json.loads(self.requests[-1].content)
-        self.assertEqual(sent["model"], "gpt-4.1-mini")
-        self.assertNotIn("reasoning_effort", sent)
-        self.assertEqual(sent["response_format"]["json_schema"]["strict"], True)
-        self.assertEqual(sent["messages"][1]["content"][1]["image_url"]["url"], PNG)
+    def test_gpt_41_mini_defaults_effort_and_omits_upstream_parameter(self):
+        for fields in ([], [("model", "gpt-4.1-mini")], [("reasoning_effort", "none")],
+                       [("model", "gpt-4.1-mini"), ("reasoning_effort", "none")]):
+            with self.subTest(fields=fields):
+                result, _ = self.invoke(fields=fields)
+                self.assertEqual(result["statusCode"], 200)
+                sent = json.loads(self.requests[-1].content)
+                self.assertEqual(sent["model"], "gpt-4.1-mini")
+                self.assertNotIn("reasoning_effort", sent)
+                self.assertEqual(sent["response_format"]["json_schema"]["strict"], True)
+                self.assertEqual(sent["messages"][1]["content"][1]["image_url"]["url"], PNG)
         # Omitting it for Mini must not alter subsequent reasoning-model requests.
-        self.invoke()
+        self.invoke(fields=[("model", "gpt-6-luna")])
         sent = json.loads(self.requests[-1].content)
         self.assertEqual(sent["model"], "gpt-6-luna")
         self.assertEqual(sent["reasoning_effort"], "none")
 
-    def test_gpt_41_mini_rejects_missing_or_non_none_effort(self):
-        self.assert_error(400, "invalid_request", fields=[("model", "gpt-4.1-mini")])
+    def test_gpt_41_mini_rejects_non_none_effort(self):
         for effort in ("minimal", "low", "medium", "high", "xhigh", "max"):
+            self.assert_error(400, "invalid_request", fields=[("reasoning_effort", effort)])
             self.assert_error(400, "invalid_request", fields=[("model", "gpt-4.1-mini"),
                                                             ("reasoning_effort", effort)])
         self.openai.assert_not_called()
@@ -384,7 +391,7 @@ class MenuHandlerTests(unittest.TestCase):
 
     def test_each_recognized_effort_is_forwarded(self):
         for effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
-            result, _ = self.invoke(fields=[("reasoning_effort", effort)])
+            result, _ = self.invoke(fields=[("model", "gpt-6.1-sol"), ("reasoning_effort", effort)])
             self.assertEqual(result["statusCode"], 200)
             self.assertEqual(json.loads(self.requests[-1].content)["reasoning_effort"], effort)
 

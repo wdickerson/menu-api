@@ -15,7 +15,7 @@ files. Let the HTTP client generate the Content-Type header and boundary.
 | --- | --- | --- |
 | `images` | File | A JPEG, PNG, or WebP image. Repeat this exact field name for 1–10 files. |
 | `dummy` | Text (optional) | Exactly `true` or `false`; defaults to `false`. |
-| `model` | Text (optional) | OpenAI model ID; defaults to `gpt-6-luna`. |
+| `model` | Text (optional) | OpenAI model ID; defaults to `gpt-4.1-mini`. |
 | `reasoning_effort` | Text (optional) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; defaults to `none`. |
 
 Options apply only to that request. Defaults are defined in Lambda code, not the
@@ -23,11 +23,11 @@ template or environment. Not every model supports every effort; choose a vision
 model with strict structured output and access granted in your OpenAI project.
 For Sol, explicitly send `model=gpt-6.1-sol` and `reasoning_effort=low`.
 
-**GPT-4.1 Mini:** send both `model=gpt-4.1-mini` and `reasoning_effort=none`.
-For this model only, the effort must be explicitly provided as `none`; missing
-or other values return HTTP 400 before any paid call. The server then omits the
-reasoning parameter entirely from the OpenAI request, because Mini does not
-support it. Other models still receive the selected effort.
+**GPT-4.1 Mini is the default:** omit both model options, or explicitly send
+`model=gpt-4.1-mini`. Its effort may be omitted or set to `none`; other values
+return HTTP 400 before any paid call. The server always omits the reasoning
+parameter entirely from Mini's OpenAI request because Mini does not support it.
+Other models still receive the selected effort (default `none`).
 
 Images must belong to the same restaurant; order them in menu reading order.
 All images are sent together in **one** OpenAI request. The server converts the
@@ -73,7 +73,8 @@ guaranteed to fit merely because the request contains fewer than ten images.
 2. Under **Body → form-data**, add a row named **`images`**, switch its type from
    **Text** to **File**, and choose your image. Repeat the row for more images.
 3. Optionally add **`dummy`**, **`model`**, and **`reasoning_effort`** as **Text**
-   fields. To try Mini, set `model` to `gpt-4.1-mini` and `reasoning_effort` to `none`.
+   fields. Mini requires no model options; for a reasoning model, select its
+   `model` and a compatible `reasoning_effort`.
 4. Remove any manually configured `Content-Type` header, especially the old
    `application/json` header. Postman must generate the multipart boundary.
 5. Click **Send**. Live requests require enabled transcription and a configured
@@ -167,7 +168,7 @@ unsupported routes/methods) use AWS's own response format, not this error envelo
 
 1. In the [OpenAI API platform](https://platform.openai.com/api-keys), create a
    dedicated project API key with permission to create Chat Completions and use
-   `gpt-6-luna`. Enable API billing/credits for that project. A ChatGPT
+   `gpt-4.1-mini`. Enable API billing/credits for that project. A ChatGPT
    subscription does **not** fund API usage. Configure usage alerts and limits;
    project budget alerts alone are not a guaranteed hard spending cap.
 2. In **AWS Secrets Manager → us-east-1 → Store a new secret → Other type of
@@ -229,7 +230,8 @@ event wrapping, including byte-preservation and maximum-size upload tests.
 | `OPENAI_API_KEY` | Optional local override; never set by the stack. |
 | `ALLOWED_ORIGIN` | `https://menu.littleapp.io`; stack uses the configured frontend domain. |
 
-Defaults (`gpt-6-luna`, `none`) are defined in [lambda/index.py](lambda/index.py).
+Defaults (`gpt-4.1-mini`, `none`, with effort omitted upstream for Mini) are
+defined in [lambda/index.py](lambda/index.py).
 Multipart `model` and `reasoning_effort` fields override them for one request;
 CloudFormation and environment variables do not select either option. Changing
 defaults requires a code release; comparing models needs only request fields.
