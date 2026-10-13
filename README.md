@@ -67,19 +67,20 @@ files. Let the HTTP client generate the Content-Type header and boundary.
 | --- | --- | --- |
 | `images` | File | A JPEG, PNG, or WebP image. Repeat this exact field name for 1–10 files. |
 | `dummy` | Text (optional) | Exactly `true` or `false`; defaults to `false`. |
-| `model` | Text (optional) | OpenAI model ID; defaults to `gpt-4.1-mini`. |
-| `reasoning_effort` | Text (optional) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; defaults to `none`. |
+| `model` | Text (optional) | OpenAI model ID; defaults to `DEFAULT_MODEL` in [lambda/index.py](lambda/index.py). |
+| `reasoning_effort` | Text (optional) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; defaults to `DEFAULT_REASONING_EFFORT` in [lambda/index.py](lambda/index.py). |
 
 Options apply only to that request. Defaults are defined in Lambda code, not the
 template or environment. Not every model supports every effort; choose a vision
 model with strict structured output and access granted in your OpenAI project.
 For Sol, explicitly send `model=gpt-6.1-sol` and `reasoning_effort=low`.
 
-**GPT-4.1 Mini is the default:** omit both model options, or explicitly send
-`model=gpt-4.1-mini`. Its effort may be omitted or set to `none`; other values
+Omit both model options to use the code-owned defaults. To use **GPT-4.1 Mini**,
+explicitly send `model=gpt-4.1-mini` and `reasoning_effort=none`. Its effort may
+also be omitted when the code-owned default effort is `none`; other values
 return HTTP 400 before any paid call. The server always omits the reasoning
 parameter entirely from Mini's OpenAI request because Mini does not support it.
-Other models still receive the selected effort (default `none`).
+Other models still receive the selected or code-owned default effort.
 
 Images must belong to the same restaurant; order them in menu reading order.
 All images are sent together in **one** OpenAI request. The server converts the
@@ -125,7 +126,7 @@ guaranteed to fit merely because the request contains fewer than ten images.
 2. Under **Body → form-data**, add a row named **`images`**, switch its type from
    **Text** to **File**, and choose your image. Repeat the row for more images.
 3. Optionally add **`dummy`**, **`model`**, and **`reasoning_effort`** as **Text**
-   fields. Mini requires no model options; for a reasoning model, select its
+   fields. For Mini, explicitly select its model and `none` effort; for a reasoning model, select its
    `model` and a compatible `reasoning_effort`.
 4. Remove any manually configured `Content-Type` header, especially the old
    `application/json` header. Postman must generate the multipart boundary.
