@@ -1,10 +1,62 @@
 # Menu API — Version 1
 
+## Start the local API (automatic reload)
+
+From this directory, use **Python 3.13**:
+
+```sh
+python3.13 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+cp .env.example .env
+python dev_server.py
+```
+
+POST to **http://127.0.0.1:8000/menus** in Postman using the request formats below.
+Use `python dev_server.py --port 8001` to change the port. Python source changes
+and edits to the local dotenv file restart the server automatically.
+The server binds only to loopback and never enables the interactive debugger;
+it is a development server, not a production host.
+
+The gitignored local dotenv file is loaded only by [dev_server.py](dev_server.py),
+from this directory regardless of your working directory. Existing process
+environment variables take precedence. [.env.example](.env.example) contains no
+secret and keeps `ENABLE_LIVE_TRANSCRIPTION=false`. Dummy mode needs no key:
+
+```sh
+curl http://127.0.0.1:8000/menus \
+   -H 'Content-Type: application/json' --data '{"dummy":true}'
+```
+
+For intentional **paid** transcription, put your real `OPENAI_API_KEY` in the
+local dotenv file and set `ENABLE_LIVE_TRANSCRIPTION=true` there. Do not put keys
+in request fields, frontend configuration, logs, or source control. Alternatively,
+configure `OPENAI_SECRET_ID` and AWS credentials using a secure local mechanism.
+Never commit the local dotenv file. Model/effort remain per-request form fields.
+
+Run all offline checks with development dependencies installed:
+
+```sh
+python -m unittest discover -s tests -v
+python -m unittest discover -s dev-tests -v
+```
+
+The local adapter forwards raw bodies as binary API Gateway events to the unchanged
+Lambda handler, preserving validation, upload limits, errors, and response headers.
+Local OPTIONS supports non-credentialed browser preflights. It does not emulate AWS
+authentication, throttling, event-envelope limits, or gateway timing. The existing
+frontend still targets the deployed API; starting this server does not redirect it.
+[requirements-dev.txt](requirements-dev.txt), the server, and dotenv loading are
+development-only: the production pipeline still installs [requirements.txt](requirements.txt)
+and packages only the Lambda directory. Production Lambda never loads dotenv.
+
+## Production API
+
 Python Lambda (`index.lambda_handler`) behind API Gateway REST **POST /menus**.
 Transcribes 1–10 menu images using OpenAI vision and strict structured output.
 Printed menus, counter boards, food-truck posters, and handwritten beer lists
 are supported through the transcription prompt. No database or image storage.
-The frontend is unchanged and does not call this API yet.
+This development-server addition does not change the frontend or its API URL.
 
 ## Request
 
@@ -82,7 +134,7 @@ guaranteed to fit merely because the request contains fewer than ten images.
 
 Future browser clients can use `FormData.append('images', file)` for each file
 and send the FormData body directly without setting Content-Type themselves.
-This change does not integrate or modify the frontend.
+The local server does not modify the frontend or its API URL.
 
 ### Free dummy mode
 
@@ -212,8 +264,8 @@ Install [requirements.txt](requirements.txt) into a virtual environment with
 `python -m pip install -r requirements.txt`. Set `OPENAI_API_KEY` in the process
 environment using a secure local secret mechanism and set
 `ENABLE_LIVE_TRANSCRIPTION=true` for intentional paid calls. A local environment
-key takes precedence over Secrets Manager. The application does not load dotenv
-files automatically; do not commit any credentials.
+key takes precedence over Secrets Manager. The production handler does not load
+dotenv files; the local server above does. Do not commit any credentials.
 
 Offline tests and dummy mode need neither a key nor AWS credentials. Run
 `python -m unittest discover -s tests -v` from this repository root. Tests use the

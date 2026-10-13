@@ -1,0 +1,4 @@
+# Local server only. Never install these into the Lambda deployment package.
+-r requirements.txt
+Flask==3.1.2
+python-dotenv==1.2.1
