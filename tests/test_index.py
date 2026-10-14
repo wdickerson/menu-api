@@ -57,7 +57,7 @@ class MenuHandlerTests(unittest.TestCase):
         self.aws.side_effect = AssertionError("Unexpected AWS call")
         self.requests = []
         self.http_status = 200
-        self.http_body = self.completion(MENU)
+        self.http_body = self.response(MENU)
         self.network_error = None
         self.openai = self.start_patch(patch.object(openai_provider.openai_sdk, "AsyncOpenAI", side_effect=self.make_client))
         self.log = self.start_patch(patch.object(handler, "logger"))
@@ -79,12 +79,17 @@ class MenuHandlerTests(unittest.TestCase):
         return httpx.Response(self.http_status, json=self.http_body)
 
     @staticmethod
-    def completion(data, finish_reason="stop", refusal=None):
+    def response(data, status="completed", incomplete_reason=None, refusal=None):
+        content = [{"type": "output_text", "text": json.dumps(data), "annotations": []}]
+        if refusal is not None:
+            content = [{"type": "refusal", "refusal": refusal}]
         return {
-            "id": "chatcmpl-test", "object": "chat.completion", "created": 0, "model": "gpt-4.1-mini",
-            "choices": [{"index": 0, "finish_reason": finish_reason, "message": {
-                "role": "assistant", "content": json.dumps(data), "refusal": refusal,
-            }}],
+            "id": "resp-test", "object": "response", "created_at": 0, "model": "gpt-6.1-sol",
+            "status": status, "error": None,
+            "incomplete_details": {"reason": incomplete_reason} if incomplete_reason else None,
+            "output": [{"id": "msg-test", "type": "message", "status": "completed",
+                        "role": "assistant", "content": content}],
+            "parallel_tool_calls": False, "tool_choice": "auto", "tools": [],
         }
 
     def invoke(self, payload=None, *, body=None, method="POST", encoded=None, headers=None,
@@ -116,15 +121,13 @@ class MenuHandlerTests(unittest.TestCase):
         self.assertTrue(data["error"]["message"])
         return result, data
 
-    def assert_provider_settings(self, sent, *, model=None, effort=None):
-        """Check code-owned settings in the JSON sent to the provider SDK."""
-        model = openai_provider.DEFAULT_MODEL if model is None else model
-        effort = openai_provider.DEFAULT_REASONING_EFFORT if effort is None else effort
-        self.assertEqual(sent["model"], model)
-        if model == "gpt-4.1-mini":
-            self.assertNotIn("reasoning_effort", sent)
-        else:
-            self.assertEqual(sent["reasoning_effort"], effort)
+    def assert_provider_settings(self, sent):
+        """Check the configured settings in the JSON sent to the provider SDK."""
+        self.assertEqual(sent["model"], "gpt-6.1-sol")
+        self.assertEqual(sent["service_tier"], "ultrafast")
+        self.assertEqual(sent["reasoning"], {"effort": "low"})
+        for legacy_field in ("messages", "response_format", "reasoning_effort", "max_completion_tokens"):
+            self.assertNotIn(legacy_field, sent)
 
     def test_real_transcription_matches_frontend_contract(self):
         result, menu = self.invoke()
@@ -132,41 +135,59 @@ class MenuHandlerTests(unittest.TestCase):
         self.assertEqual(menu, {"isDummy": False, "restaurantName": MENU["restaurantName"], "sections": MENU["sections"]})
         self.assertEqual(len(self.requests), 1)
         request = self.requests[0]
-        self.assertEqual(str(request.url), "https://api.openai.com/v1/chat/completions")
+        self.assertEqual(str(request.url), "https://api.openai.com/v1/responses")
         self.assertEqual(request.headers["authorization"], "Bearer test-key-not-a-real-secret")
         sent = json.loads(request.content)
         self.assert_provider_settings(sent)
-        self.assertEqual(sent["messages"][0], {"role": "system", "content": shared.MENU_TRANSCRIPTION_PROMPT})
+        self.assertEqual(sent["instructions"], shared.MENU_TRANSCRIPTION_PROMPT)
         self.assertFalse(sent["store"])
-        self.assertIsInstance(sent["max_completion_tokens"], int)
-        self.assertGreater(sent["max_completion_tokens"], 0)
-        self.assertTrue(sent["response_format"]["json_schema"]["strict"])
-        self.assertEqual(sent["response_format"]["json_schema"]["schema"], shared.MENU_TRANSCRIPTION_SCHEMA)
-        self.assertEqual(sent["messages"][1]["content"][1]["image_url"], {"url": PNG, "detail": "high"})
+        self.assertEqual(sent["max_output_tokens"], 8000)
+        self.assertEqual(sent["text"]["format"], {
+            "type": "json_schema", "name": "menu_transcription", "strict": True,
+            "schema": shared.MENU_TRANSCRIPTION_SCHEMA,
+        })
+        self.assertEqual(sent["input"], [{"role": "user", "content": [
+            {"type": "input_text", "text": "Transcribe these menu images."},
+            {"type": "input_image", "image_url": PNG, "detail": "high"},
+        ]}])
         self.assertEqual(self.openai.call_args.kwargs["max_retries"], 0)
         self.aws.assert_not_called()
 
-    def test_one_through_ten_images_use_one_request(self):
-        for count in (1, 2, 10):
+    def test_one_through_five_images_use_one_request(self):
+        for count in range(1, 6):
             before = len(self.requests)
             result, _ = self.invoke(files=[PNG_FILE] * count, fields=[("dummy", "false")])
             self.assertEqual(result["statusCode"], 200)
             self.assertEqual(len(self.requests), before + 1)
-            self.assertEqual(len(json.loads(self.requests[-1].content)["messages"][1]["content"]), count + 1)
+            self.assertEqual(len(json.loads(self.requests[-1].content)["input"][0]["content"]), count + 1)
+
+    def test_distinct_images_preserve_upload_order(self):
+        images = [("image/jpeg", b"\xff\xd8\xfffirst"), ("image/png", PNG_BYTES),
+                  ("image/webp", b"RIFF1234WEBPlast")]
+        files = [("images", (f"page-{index}", raw, mime)) for index, (mime, raw) in enumerate(images)]
+        result, _ = self.invoke(files=files)
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(len(self.requests), 1)
+        sent = json.loads(self.requests[0].content)
+        self.assertEqual(sent["input"][0]["content"][1:], [
+            {"type": "input_image", "detail": "high",
+             "image_url": f"data:{mime};base64," + base64.b64encode(raw).decode()}
+            for mime, raw in images
+        ])
 
     def test_supported_image_signatures(self):
         for mime, raw in (("jpeg", b"\xff\xd8\xfftest"), ("png", b"\x89PNG\r\n\x1a\ntest"),
                           ("webp", b"RIFF1234WEBPtest")):
             result, _ = self.invoke(files=[("images", (f"menu.{mime}", raw, f"image/{mime}"))])
             self.assertEqual(result["statusCode"], 200)
-            image = json.loads(self.requests[-1].content)["messages"][1]["content"][1]["image_url"]["url"]
+            image = json.loads(self.requests[-1].content)["input"][0]["content"][1]["image_url"]
             self.assertEqual(image, f"data:image/{mime};base64," + base64.b64encode(raw).decode())
 
     def test_missing_or_generic_mime_is_sniffed(self):
         for mime in (None, "application/octet-stream"):
             result, _ = self.invoke(files=[("images", ("menu", PNG_BYTES, mime))])
             self.assertEqual(result["statusCode"], 200)
-            self.assertEqual(json.loads(self.requests[-1].content)["messages"][1]["content"][1]["image_url"]["url"], PNG)
+            self.assertEqual(json.loads(self.requests[-1].content)["input"][0]["content"][1]["image_url"], PNG)
 
     def test_dummy_works_without_credentials_or_live_mode(self):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "", "ENABLE_LIVE_TRANSCRIPTION": "false"}):
@@ -199,7 +220,7 @@ class MenuHandlerTests(unittest.TestCase):
 
     def test_missing_or_invalid_image_counts(self):
         self.assert_error(400, "invalid_images", files=[])
-        self.assert_error(400, "invalid_images", files=[PNG_FILE] * 11)
+        self.assert_error(400, "invalid_images", files=[PNG_FILE] * 6)
         self.openai.assert_not_called()
 
     def test_json_is_only_for_dummy(self):
@@ -291,7 +312,7 @@ class MenuHandlerTests(unittest.TestCase):
         raw = PNG_BYTES + b"x" * (handler.MAX_IMAGE_BYTES - len(PNG_BYTES))
         result, _ = self.invoke(files=[("images", ("menu.png", raw, "image/png"))])
         self.assertEqual(result["statusCode"], 200)
-        uploaded = json.loads(self.requests[-1].content)["messages"][1]["content"][1]["image_url"]["url"]
+        uploaded = json.loads(self.requests[-1].content)["input"][0]["content"][1]["image_url"]
         self.assertEqual(base64.b64decode(uploaded.split(",", 1)[1]), raw)
         # Reserve 128 KiB beyond the maximum body for normal proxy metadata.
         self.assertLess(4 * ((handler.MAX_BODY_BYTES + 2) // 3) + 128 * 1024, 6 * 1024 * 1024)
@@ -347,66 +368,31 @@ class MenuHandlerTests(unittest.TestCase):
         self.aws.assert_not_called()
 
     def test_defaults_ignore_environment_overrides(self):
-        with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4.1", "OPENAI_REASONING_EFFORT": "high"}):
+        with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4.1", "OPENAI_REASONING_EFFORT": "high",
+                                     "OPENAI_SERVICE_TIER": "default"}):
             self.invoke()
         sent = json.loads(self.requests[-1].content)
         self.assert_provider_settings(sent)
 
-    def test_changed_code_defaults_are_used_on_successive_requests_and_restored(self):
-        original_model = openai_provider.DEFAULT_MODEL
-        original_effort = openai_provider.DEFAULT_REASONING_EFFORT
-        result, _ = self.invoke()
-        self.assertEqual(result["statusCode"], 200)
-        self.assert_provider_settings(json.loads(self.requests[-1].content),
-                            model=original_model, effort=original_effort)
-        for model, effort in (("gpt-6-luna", "low"), ("gpt-6.1-sol", "high")):
-            with self.subTest(model=model, effort=effort):
-                with patch.object(openai_provider, "DEFAULT_MODEL", model), \
-                        patch.object(openai_provider, "DEFAULT_REASONING_EFFORT", effort):
-                    for _ in range(2):
-                        before = len(self.requests)
-                        result, _ = self.invoke()
-                        self.assertEqual(result["statusCode"], 200)
-                        self.assertEqual(len(self.requests), before + 1)
-                        self.assert_provider_settings(json.loads(self.requests[-1].content), model=model, effort=effort)
-                result, _ = self.invoke()
+    def test_configured_settings_are_used_on_successive_requests(self):
+        for count in (1, 2, 5):
+            with self.subTest(image_count=count):
+                before = len(self.requests)
+                result, _ = self.invoke(files=[PNG_FILE] * count)
                 self.assertEqual(result["statusCode"], 200)
-                self.assert_provider_settings(json.loads(self.requests[-1].content),
-                                    model=original_model, effort=original_effort)
+                self.assertEqual(len(self.requests), before + 1)
+                sent = json.loads(self.requests[-1].content)
+                self.assert_provider_settings(sent)
+                self.assertTrue(sent["text"]["format"]["strict"])
+                self.assertEqual(len(sent["input"][0]["content"]), count + 1)
 
-    def test_gpt_41_mini_defaults_effort_and_omits_upstream_parameter(self):
-        with patch.object(openai_provider, "DEFAULT_MODEL", "gpt-4.1-mini"):
-            for effort in ("none", "high"):
-                with self.subTest(effort=effort), \
-                        patch.object(openai_provider, "DEFAULT_REASONING_EFFORT", effort):
-                    result, _ = self.invoke()
-                    self.assertEqual(result["statusCode"], 200)
-                    sent = json.loads(self.requests[-1].content)
-                    self.assertEqual(sent["model"], "gpt-4.1-mini")
-                    self.assertNotIn("reasoning_effort", sent)
-                    self.assertEqual(sent["response_format"]["json_schema"]["strict"], True)
-                    self.assertEqual(sent["messages"][1]["content"][1]["image_url"]["url"], PNG)
-        # Omitting it for Mini must not alter subsequent reasoning-model requests.
-        result, _ = self.invoke()
-        self.assertEqual(result["statusCode"], 200)
-        self.assert_provider_settings(json.loads(self.requests[-1].content))
-
-    def test_each_code_owned_recognized_effort_is_forwarded(self):
-        with patch.object(openai_provider, "DEFAULT_MODEL", "gpt-6.1-sol"):
-            for effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
-                with self.subTest(effort=effort), \
-                        patch.object(openai_provider, "DEFAULT_REASONING_EFFORT", effort):
-                    result, _ = self.invoke()
-                    self.assertEqual(result["statusCode"], 200)
-                    self.assert_provider_settings(json.loads(self.requests[-1].content), model="gpt-6.1-sol", effort=effort)
-
-    def test_eleven_parts_with_dummy_after_files_and_twelve_parts_rejected(self):
-        files = [PNG_FILE] * 10 + [("dummy", (None, "false"))]
+    def test_six_parts_with_dummy_after_files_and_seven_parts_rejected(self):
+        files = [PNG_FILE] * 5 + [("dummy", (None, "false"))]
         result, _ = self.invoke(files=files)
         self.assertEqual(result["statusCode"], 200)
         sent = json.loads(self.requests[-1].content)
         self.assert_provider_settings(sent)
-        self.assertEqual(len(sent["messages"][1]["content"]), 11)
+        self.assertEqual(len(sent["input"][0]["content"]), 6)
         self.assertEqual(len(self.requests), 1)
         with patch.object(openai_provider, "transcribe_menu") as transcribe:
             self.assert_error(400, "invalid_request", files=files + [PNG_FILE])
@@ -417,12 +403,12 @@ class MenuHandlerTests(unittest.TestCase):
 
     def test_menu_detection_errors(self):
         for status, code in (("no_menu", "no_menu_found"), ("illegible_text", "illegible_text")):
-            self.http_body = self.completion({"status": status, "restaurantName": "", "sections": []})
+            self.http_body = self.response({"status": status, "restaurantName": "", "sections": []})
             self.assert_error(422, code)
 
     def test_restaurant_name_fallback_and_trimming(self):
         for name, expected in (("Indian Restaurant", "Indian Restaurant"), ("  Café  ", "Café"), (" ", "Restaurant")):
-            self.http_body = self.completion({**MENU, "restaurantName": name})
+            self.http_body = self.response({**MENU, "restaurantName": name})
             _, data = self.invoke()
             self.assertEqual(data["restaurantName"], expected)
 
@@ -434,31 +420,126 @@ class MenuHandlerTests(unittest.TestCase):
                         {"name": "Drinks", "items": [{"name": "Coffee"}]}):
             cases.append({**MENU, "sections": [section]})
         for data in cases:
-            self.http_body = self.completion(data)
+            self.http_body = self.response(data)
             self.assert_error(502, "invalid_openai_response")
 
-    def test_refusal_truncation_and_unexpected_finish(self):
-        for reason, refusal, status, code in (
-            ("stop", "Refusal", 422, "transcription_refused"),
-            ("content_filter", None, 422, "transcription_refused"),
-            ("length", None, 502, "incomplete_transcription"),
-            ("tool_calls", None, 502, "invalid_openai_response"),
+    def test_refusal_truncation_and_unexpected_status(self):
+        for response_status, reason, refusal, status, code in (
+            ("completed", None, "Refusal", 422, "transcription_refused"),
+            ("incomplete", "content_filter", None, 422, "transcription_refused"),
+            ("incomplete", "max_output_tokens", None, 502, "incomplete_transcription"),
+            ("incomplete", None, None, 502, "invalid_openai_response"),
+            ("failed", None, None, 502, "invalid_openai_response"),
+            ("queued", None, None, 502, "invalid_openai_response"),
+            ("in_progress", None, None, 502, "invalid_openai_response"),
+            ("cancelled", None, None, 502, "invalid_openai_response"),
+            (None, None, None, 502, "invalid_openai_response"),
         ):
-            self.http_body = self.completion(MENU, reason, refusal)
-            self.assert_error(status, code)
+            with self.subTest(response_status=response_status, reason=reason):
+                # Even valid menu JSON must not turn an incomplete response into success.
+                self.http_body = self.response(MENU, response_status, reason, refusal)
+                self.assert_error(status, code)
 
-    def test_missing_choices_and_invalid_content(self):
-        self.http_body = {**self.completion(MENU), "choices": []}
-        self.assert_error(502, "invalid_openai_response")
+    def test_missing_output_and_invalid_content(self):
+        for output in ([], None, [None]):
+            self.http_body = {**self.response(MENU), "output": output}
+            self.assert_error(502, "invalid_openai_response")
         for content in (None, "not-json", "```json\n{}\n```", "[" * 2000):
-            self.http_body = self.completion(MENU)
-            self.http_body["choices"][0]["message"]["content"] = content
+            self.http_body = self.response(MENU)
+            self.http_body["output"][0]["content"][0]["text"] = content
             self.assert_error(502, "invalid_openai_response")
 
     def test_malformed_success_envelopes(self):
-        for data in (b"not-json", [], {}, {"choices": [None]}, {"choices": [{"message": None}]}):
+        for data in (b"not-json", [], {}, {"output": [None]}, {"output": [{"content": None}]}):
             self.http_body = data
             self.assert_error(502, "invalid_openai_response")
+
+    def test_reasoning_metadata_before_menu_text_is_ignored(self):
+        self.http_body["output"].insert(0, {
+            "id": "rs-test", "type": "reasoning", "summary": [],
+            "content": [{"type": "reasoning_text", "text": "Not menu JSON"}],
+            "encrypted_content": "opaque-reasoning",
+        })
+        result, menu = self.invoke(files=[PNG_FILE] * 2)
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(menu["sections"], MENU["sections"])
+        self.assertEqual(len(self.requests), 1)
+
+    def test_text_blocks_and_messages_are_combined_in_order(self):
+        text = json.dumps(MENU)
+        for separate_messages in (False, True):
+            with self.subTest(separate_messages=separate_messages):
+                self.http_body = self.response(MENU)
+                message = self.http_body["output"][0]
+                message["content"][0]["text"] = text[:20]
+                remaining = {"type": "output_text", "text": text[20:], "annotations": []}
+                if separate_messages:
+                    self.http_body["output"].append({**message, "id": "msg-second", "content": [remaining]})
+                else:
+                    message["content"].append(remaining)
+                result, menu = self.invoke()
+                self.assertEqual(result["statusCode"], 200)
+                self.assertEqual(menu["sections"], MENU["sections"])
+
+    def test_refusal_alongside_valid_menu_is_not_ignored(self):
+        self.http_body["output"][0]["content"].append({"type": "refusal", "refusal": "PRIVATE-REFUSAL"})
+        result, _ = self.assert_error(422, "transcription_refused")
+        self.assertNotIn("PRIVATE-REFUSAL", result["body"])
+        self.assertNotIn("PRIVATE-REFUSAL", str(self.log.mock_calls))
+
+    def test_refusal_takes_priority_over_truncation_and_malformed_text(self):
+        for status, reason in (("incomplete", "max_output_tokens"), ("completed", None)):
+            with self.subTest(status=status):
+                self.http_body = self.response(MENU, status, reason)
+                self.http_body["output"][0]["content"][0]["text"] = None
+                self.http_body["output"][0]["content"].append({"type": "refusal", "refusal": "Refusal"})
+                self.assert_error(422, "transcription_refused")
+
+    def test_incomplete_response_without_text_preserves_error_mapping(self):
+        for reason, status, code in (("content_filter", 422, "transcription_refused"),
+                                     ("max_output_tokens", 502, "incomplete_transcription")):
+            self.http_body = {**self.response(MENU, "incomplete", reason), "output": []}
+            self.assert_error(status, code)
+
+    def test_response_errors_are_sanitized_without_retries(self):
+        for code, status, expected in (
+            ("server_error", 502, "openai_failure"),
+            ("rate_limit_exceeded", 503, "openai_rate_limited"),
+            ("invalid_image", 400, "invalid_image"),
+            ("insufficient_quota", 503, "openai_not_funded"),
+        ):
+            with self.subTest(code=code):
+                self.http_body = self.response(MENU, "failed")
+                self.http_body["error"] = {"code": code, "message": "SECRET-UPSTREAM-MESSAGE"}
+                before = len(self.requests)
+                result, _ = self.assert_error(status, expected)
+                self.assertEqual(len(self.requests), before + 1)
+                self.assertNotIn("SECRET-UPSTREAM-MESSAGE", result["body"])
+                self.assertNotIn("SECRET-UPSTREAM-MESSAGE", str(self.log.mock_calls))
+
+    def test_unexpected_output_items_are_rejected(self):
+        for item in (None, {}, {"type": "unknown"},
+                     {"id": "fc-test", "type": "function_call", "name": "unexpected",
+                      "call_id": "call-test", "arguments": "{}"}):
+            with self.subTest(item=item):
+                self.http_body = self.response(MENU)
+                self.http_body["output"].append(item)
+                self.assert_error(502, "invalid_openai_response")
+
+    def test_malformed_output_messages_are_rejected(self):
+        for changes in ({"status": "in_progress"}, {"status": "incomplete"}, {"status": None},
+                        {"role": "user"}, {"content": None}, {"content": []},
+                        {"content": [None]}, {"content": [{}]},
+                        {"content": [{"type": "unknown", "text": json.dumps(MENU)}]},
+                        {"content": [{"type": "output_text", "text": 123}]}):
+            with self.subTest(changes=changes):
+                self.http_body = self.response(MENU)
+                self.http_body["output"][0].update(changes)
+                self.assert_error(502, "invalid_openai_response")
+
+    def test_reasoning_without_menu_text_is_rejected(self):
+        self.http_body["output"] = [{"id": "rs-test", "type": "reasoning", "summary": []}]
+        self.assert_error(502, "invalid_openai_response")
 
     def test_openai_http_errors_are_sanitized_without_retries(self):
         cases = [
@@ -518,7 +599,7 @@ class MenuHandlerTests(unittest.TestCase):
             finally:
                 cancelled.append(True)
 
-        with patch.object(openai_provider, "_request_completion", side_effect=slow_request), \
+        with patch.object(openai_provider, "_request_response", side_effect=slow_request), \
             patch.object(openai_provider, "TIMEOUT_SECONDS", 0.01):
             self.assert_error(504, "openai_timeout")
         self.assertEqual(cancelled, [True])

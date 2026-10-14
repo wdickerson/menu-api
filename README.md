@@ -26,6 +26,10 @@ or `DEFAULT_MODEL` in [lambda/providers/anthropic.py](lambda/providers/anthropic
 the development server reloads Python changes automatically. A production settings
 change requires an API code release. There is no automatic retry or cross-provider fallback.
 All uploaded images are included in a single paid request to the selected provider.
+OpenAI uses the Responses API with the shared prompt and strict JSON schema,
+high-detail image inputs, an 8,000-token output cap, and response storage disabled.
+Its parser skips reasoning metadata, combines menu text in output order, and rejects
+refusals, incomplete responses, and unexpected output items before menu validation.
 Anthropic requests keep thinking disabled. If thinking metadata is nevertheless
 returned, the parser skips it and validates only the menu text.
 
@@ -48,7 +52,7 @@ running the local server or tests.
 - [lambda/index.py](lambda/index.py): gateway request parsing, image validation,
    dummy mode, live-transcription gate, provider selection, and HTTP responses.
 - [lambda/providers/openai.py](lambda/providers/openai.py): OpenAI defaults and
-   Chat Completions request, response parsing, and errors.
+   Responses request, response parsing, and errors.
 - [lambda/providers/anthropic.py](lambda/providers/anthropic.py): Haiku defaults,
    Messages request, response parsing (including thinking metadata), and errors.
 - [lambda/providers/shared.py](lambda/providers/shared.py): `MenuImage`, `ApiError`,
@@ -116,7 +120,7 @@ and packages only the Lambda directory. Production Lambda never loads dotenv.
 ## Production API
 
 Python Lambda (`index.lambda_handler`) behind API Gateway REST **POST /menus**.
-Transcribes 1–10 menu images using OpenAI or Anthropic vision and strict structured output.
+Transcribes 1–5 menu images using OpenAI or Anthropic vision and strict structured output.
 Printed menus, counter boards, food-truck posters, and handwritten beer lists
 are supported through the transcription prompt. No database or image storage.
 This development-server addition does not change the frontend or its API URL.
@@ -128,7 +132,7 @@ files. Let the HTTP client generate the Content-Type header and boundary.
 
 | Field name | Field type | Value |
 | --- | --- | --- |
-| `images` | File | A JPEG, PNG, or WebP image. Repeat this exact field name for 1–10 files. |
+| `images` | File | A JPEG, PNG, or WebP image. Repeat this exact field name for 1–5 files. |
 | `dummy` | Text (optional) | Exactly `true` or `false`; defaults to `false`. |
 
 These are the only accepted multipart fields.
@@ -151,10 +155,10 @@ blocks); clients do not encode images.
 ### Upload limits (no S3 required)
 
 - **4,500,000 bytes (4.5 decimal MB) combined original image files**, whether
-  uploading one file or ten. This replaces the old 2.8 MB image limit.
+   uploading one file or five. This replaces the old 2.8 MB image limit.
 - **4,600,000 bytes (4.6 decimal MB) for the complete multipart body**, including
   boundaries, part headers, and text fields.
-- At most 11 parts (ten files plus `dummy`), eight headers per part, and 4,096
+- At most 6 parts (five files plus `dummy`), eight headers per part, and 4,096
   bytes per part header. Files are parsed in bounded memory, not saved to disk.
 
 API Gateway treats multipart as binary and base64-wraps the body when invoking
@@ -169,7 +173,7 @@ API Gateway's 10 MB request limit does not increase Lambda's smaller limit.
 No application resizing or recompression occurs: accepted file bytes reach the provider
 unchanged. The provider may resize images for its vision model. If photos exceed these
 limits, crop/compress them or submit fewer files. Full-resolution photos are not
-guaranteed to fit merely because the request contains fewer than ten images.
+guaranteed to fit merely because the request contains fewer than five images.
 
 ### Postman
 
@@ -268,8 +272,9 @@ unsupported routes/methods) use AWS's own response format, not this error envelo
 ### AWS deployment — recommended
 
 1. In the [OpenAI API platform](https://platform.openai.com/api-keys), create a
-   dedicated project API key with permission to create Chat Completions and use
-   the code-owned model. Enable API
+   dedicated project API key with permission to create Responses (`POST /v1/responses`)
+   and use the code-owned model. Existing restricted keys must allow Responses,
+   not just Chat Completions. Enable API
    billing/credits for that project. A ChatGPT
    subscription does **not** fund API usage. Configure usage alerts and limits;
    project budget alerts alone are not a guaranteed hard spending cap.
@@ -366,7 +371,7 @@ Lambda time. Pending work is cancelled on timeout and the SDK never automaticall
 retries. Cancellation does not guarantee the provider stops processing/billing the
 request. Lambda has 512 MB and a 28-second timeout; API Gateway waits 29 seconds.
 Changing model or effort does not increase this deadline. Higher reasoning effort
-may time out even on a single image. Long menus or ten dense photos may time out:
+may time out even on a single image. Long menus or five dense photos may time out:
 send fewer photos. Supporting reliably longer jobs would require an asynchronous
 API or an increased gateway timeout/quota,
 not simply raising the Lambda timeout. Output is limited to 8,000 tokens; truncated

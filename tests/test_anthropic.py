@@ -111,8 +111,8 @@ class AnthropicHandlerTests(unittest.TestCase):
         self.assertEqual(self.anthropic.call_args.kwargs["max_retries"], 0)
         self.aws.assert_not_called()
 
-    def test_one_through_ten_images_in_one_call(self):
-        for count in (1, 2, 10):
+    def test_one_through_five_images_in_one_call(self):
+        for count in range(1, 6):
             before = len(self.requests)
             response, menu = self.invoke(files=[PNG_FILE] * count)
             self.assertEqual(response["statusCode"], 200, menu)
@@ -172,7 +172,7 @@ class AnthropicHandlerTests(unittest.TestCase):
         with patch.dict(os.environ, {"ENABLE_LIVE_TRANSCRIPTION": "false"}):
             self.assert_error(503, "transcription_disabled")
         self.assert_error(400, "invalid_images", files=[])
-        self.assert_error(400, "invalid_images", files=[PNG_FILE] * 11)
+        self.assert_error(400, "invalid_images", files=[PNG_FILE] * 6)
         self.assert_error(400, "invalid_image", files=[("images", ("bad", b"bad", "image/png"))])
         self.aws.assert_not_called()
         self.anthropic.assert_not_called()

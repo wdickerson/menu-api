@@ -1,10 +1,19 @@
-"""OpenAI menu transcription with code-owned settings, Chat Completions, and response parsing."""
+"""OpenAI menu transcription with code-owned settings, Responses, and response parsing."""
 
 import asyncio
 import json
 
 import openai as openai_sdk
-from openai.types.chat import ChatCompletionContentPartParam
+from openai.types.responses import (
+    Response,
+    ResponseError,
+    ResponseInputContentParam,
+    ResponseOutputMessage,
+    ResponseOutputRefusal,
+    ResponseOutputText,
+    ResponseReasoningItem,
+)
+from openai.types.responses.response import IncompleteDetails
 from openai.types.shared import ReasoningEffort
 
 from .shared import (
@@ -28,13 +37,14 @@ def transcribe_menu(images: list[MenuImage], context):
     """Send all images in one request; never retry or fall back to another provider."""
     api_key = get_api_key("OPENAI_API_KEY")
     timeout = get_request_timeout(context, provider_name="OpenAI", max_seconds=TIMEOUT_SECONDS)
-    content: list[ChatCompletionContentPartParam] = [{"type": "text", "text": "Transcribe these menu images."}]
-    content.extend({"type": "image_url", "image_url": {
-        "url": f"data:{image.media_type};base64,{image.base64_data}", "detail": "high",
-    }} for image in images)
+    content: list[ResponseInputContentParam] = [{"type": "input_text", "text": "Transcribe these menu images."}]
+    content.extend({
+        "type": "input_image", "image_url": f"data:{image.media_type};base64,{image.base64_data}",
+        "detail": "high",
+    } for image in images)
     try:
-        completion = asyncio.run(run_with_deadline(
-            _request_completion(api_key, content, timeout), timeout))
+        response = asyncio.run(run_with_deadline(
+            _request_response(api_key, content, timeout), timeout))
     except (openai_sdk.APITimeoutError, asyncio.TimeoutError):
         raise ApiError(504, "openai_timeout", "Menu transcription timed out. Try fewer or smaller images.") from None
     except openai_sdk.APIStatusError as error:
@@ -45,43 +55,75 @@ def transcribe_menu(images: list[MenuImage], context):
         raise ApiError(502, "openai_failure", "OpenAI could not complete menu transcription.") from None
     except (ValueError, TypeError):
         raise ApiError(502, "invalid_openai_response", "OpenAI returned an invalid response.") from None
-    return parse_response(completion)
+    return parse_response(response)
 
 
-async def _request_completion(api_key, content, timeout):
+async def _request_response(api_key, content, timeout):
     async with openai_sdk.AsyncOpenAI(api_key=api_key, base_url="https://api.openai.com/v1",
                                      timeout=timeout, max_retries=0) as client:
-        return await client.chat.completions.create(
-            model=DEFAULT_MODEL,
-            # Mini does not support the reasoning parameter; other models use the code setting.
-            reasoning_effort=openai_sdk.omit if DEFAULT_MODEL == "gpt-4.1-mini" else DEFAULT_REASONING_EFFORT,
-            messages=[{"role": "system", "content": MENU_TRANSCRIPTION_PROMPT},
-                      {"role": "user", "content": content}],
-            response_format={"type": "json_schema", "json_schema": {
+        return await client.responses.create(
+            model="gpt-6.1-sol",
+            service_tier="ultrafast",
+            reasoning={"effort": "low"},
+            instructions=MENU_TRANSCRIPTION_PROMPT,
+            input=[{"role": "user", "content": content}],
+            text={"format": {"type": "json_schema",
                 "name": "menu_transcription", "strict": True, "schema": MENU_TRANSCRIPTION_SCHEMA,
             }},
-            max_completion_tokens=8000,
+            max_output_tokens=8000,
             store=False,
         )
 
 
-def parse_response(completion):
-    """Require a complete, non-refused Chat Completion before validating its menu."""
-    if not isinstance(completion, openai_sdk.types.chat.ChatCompletion) or not completion.choices:
-        raise ApiError(502, "invalid_openai_response", "OpenAI returned no menu.")
-    choice = completion.choices[0]
-    if not isinstance(choice, openai_sdk.types.chat.chat_completion.Choice) or not isinstance(
-        choice.message, openai_sdk.types.chat.ChatCompletionMessage
-    ):
-        raise ApiError(502, "invalid_openai_response", "OpenAI returned an invalid response.")
-    if choice.message.refusal or choice.finish_reason == "content_filter":
+def parse_response(response):
+    """Require a complete, non-refused Response before validating its menu text."""
+    invalid = ApiError(502, "invalid_openai_response", "OpenAI returned an invalid response.")
+    if not isinstance(response, Response):
+        raise invalid
+    if response.error is not None:
+        if not isinstance(response.error, ResponseError) or not isinstance(getattr(response.error, "code", None), str):
+            raise invalid
+        raise _map_error(None, (response.error.code,))
+    output = getattr(response, "output", None)
+    # Preserve refusal priority even when partial or malformed text accompanies it.
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, ResponseOutputMessage) or getattr(item, "type", None) != "message":
+                continue
+            content = getattr(item, "content", None)
+            if isinstance(content, list) and any(
+                isinstance(part, ResponseOutputRefusal) and getattr(part, "type", None) == "refusal"
+                for part in content
+            ):
+                raise ApiError(422, "transcription_refused", "OpenAI could not transcribe these images. Try different menu photos.")
+    details = response.incomplete_details
+    if details is not None and not isinstance(details, IncompleteDetails):
+        raise invalid
+    reason = details.reason if details is not None else None
+    if reason == "content_filter":
         raise ApiError(422, "transcription_refused", "OpenAI could not transcribe these images. Try different menu photos.")
-    if choice.finish_reason == "length":
+    if reason == "max_output_tokens":
         raise ApiError(502, "incomplete_transcription", "The menu is too long to transcribe in one response. Try fewer images.")
-    if choice.finish_reason != "stop":
+    if response.status != "completed" or details is not None:
         raise ApiError(502, "invalid_openai_response", "OpenAI did not finish the menu transcription.")
+    # The SDK accepts partially malformed envelopes; check types before using output_text.
+    if not isinstance(output, list) or not output:
+        raise ApiError(502, "invalid_openai_response", "OpenAI returned no menu.")
+    for item in output:
+        if isinstance(item, ResponseReasoningItem) and item.type == "reasoning":
+            if item.status not in (None, "completed"):
+                raise invalid
+            continue
+        if (not isinstance(item, ResponseOutputMessage) or getattr(item, "type", None) != "message"
+                or getattr(item, "role", None) != "assistant" or getattr(item, "status", None) != "completed"
+                or not isinstance(getattr(item, "content", None), list) or not item.content):
+            raise invalid
+        for part in item.content:
+            if (not isinstance(part, ResponseOutputText) or getattr(part, "type", None) != "output_text"
+                    or not isinstance(getattr(part, "text", None), str)):
+                raise invalid
     try:
-        data = json.loads(choice.message.content or "")
+        data = json.loads(response.output_text)
     except (ValueError, TypeError, RecursionError):
         raise ApiError(502, "invalid_openai_response", "OpenAI returned an invalid menu.") from None
     return validate_menu(data, provider_name="OpenAI")
@@ -93,13 +135,18 @@ def map_api_error(error):
     details = body.get("error", body)
     details = details if isinstance(details, dict) else {}
     codes = (details.get("code"), details.get("type"))
+    return _map_error(error.status_code, codes)
+
+
+def _map_error(status_code, codes):
+    """Share safe mappings between HTTP errors and failed Responses."""
     if any(code in ("insufficient_quota", "billing_hard_limit_reached", "billing_not_active") for code in codes):
         return ApiError(503, "openai_not_funded", "OpenAI credits or billing quota are exhausted. The operator must check billing.")
-    if error.status_code in (401, 403):
+    if status_code in (401, 403):
         return ApiError(503, "openai_authentication_failed", "OpenAI credentials or model permissions need attention.")
-    if error.status_code == 429:
+    if status_code == 429 or (status_code is None and "rate_limit_exceeded" in codes):
         return ApiError(503, "openai_rate_limited", "OpenAI is rate limiting requests. Try again later.")
-    if error.status_code in (408, 504):
+    if status_code in (408, 504):
         return ApiError(504, "openai_timeout", "Menu transcription timed out. Try fewer or smaller images.")
     if any(code in ("invalid_image", "invalid_image_format", "invalid_base64_image", "image_parse_error", "image_too_large", "unsupported_image") for code in codes):
         return ApiError(400, "invalid_image", "OpenAI could not read an image. Re-export it as JPEG, PNG, or WebP.")

@@ -1,7 +1,7 @@
 
 ## Version 1
 
-The API accepts between 1 and 10 images in its single POST endpoint, and makes a call
+The API accepts between 1 and 5 images in its single POST endpoint, and makes a call
 to the OpenAI API to transcribe the menu image into the JSON format needed by menu-frontend.
 
 menu-api needs to know an OpenAI API key to make the request, which can be provided by a human developer.

@@ -22,9 +22,10 @@ from python_multipart.multipart import parse_options_header
 # Oversized events may still be rejected by AWS before this handler is invoked.
 MAX_BODY_BYTES = 4_600_000  # Complete multipart body, including boundaries/headers.
 MAX_IMAGE_BYTES = 4_500_000  # Combined original file bytes, not per file.
+MAX_IMAGES = 5
 MAX_JSON_BODY_BYTES = 1024  # JSON is retained only for {"dummy": true}.
 
-TRANSCRIPTION_PROVIDER = "ANTHROPIC"  # Set to "OPENAI" or "ANTHROPIC" in code only.
+TRANSCRIPTION_PROVIDER = "OPENAI"  # Set to "OPENAI" or "ANTHROPIC" in code only.
 
 TEXT_FIELD_LIMITS = {b"dummy": 5}
 logger = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ def parse_multipart(body, boundary):
     def on_part_begin():
         nonlocal part_count
         part_count += 1
-        if part_count > 11:  # Ten image files plus the optional dummy flag.
+        if part_count > MAX_IMAGES + 1:  # Image files plus the optional dummy flag.
             raise ApiError(400, "invalid_request", "Too many multipart fields.")
         headers.clear()
         part_data.clear()
@@ -137,8 +138,8 @@ def parse_multipart(body, boundary):
         if field_name == b"images":
             if not options.get(b"filename"):
                 raise ApiError(400, "invalid_image", "Each images field must be a file with a nonempty filename.")
-            if len(images) >= 10:
-                raise ApiError(400, "invalid_images", "Provide between 1 and 10 image files.")
+            if len(images) >= MAX_IMAGES:
+                raise ApiError(400, "invalid_images", f"Provide between 1 and {MAX_IMAGES} image files.")
             media_type = parse_options_header(headers.get(b"content-type"))[0].lower()
         else:
             if b"filename" in options or field_name in seen_text_fields:
@@ -186,8 +187,8 @@ def parse_multipart(body, boundary):
 
 
 def validate_images(images) -> list[MenuImage]:
-    if not isinstance(images, list) or not 1 <= len(images) <= 10:
-        raise ApiError(400, "invalid_images", "Provide between 1 and 10 images file fields.")
+    if not isinstance(images, list) or not 1 <= len(images) <= MAX_IMAGES:
+        raise ApiError(400, "invalid_images", f"Provide between 1 and {MAX_IMAGES} images file fields.")
     validated_images = []
     for declared_type, raw in images:
         if declared_type not in (b"", b"application/octet-stream", b"image/jpeg", b"image/png", b"image/webp"):
