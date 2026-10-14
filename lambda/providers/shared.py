@@ -19,11 +19,11 @@ _api_key_cache: dict[tuple[str, str], tuple[str, float]] = {}
 ResponseT = TypeVar("ResponseT")
 
 MENU_TRANSCRIPTION_PROMPT = """
-Find the menu in these images and transcribe it quickly.
-Do not omit sections.
+Quickly transcribe the menu in these images.
+Prefer transcriptions that are easily read aloud by screen readers.
+Omit standard footers (ie, about fees, allergies, warnings, etc).
 Include item descriptions if they are legible.
-Include symbols if their meaning is apparent.
-Your output will be read by a screen reader for blind users.
+If item descriptions include symbols, include their meaning.
 If you can't find a restaurant name, use a descriptive placeholder.
 """
 # MENU_TRANSCRIPTION_PROMPT = """
