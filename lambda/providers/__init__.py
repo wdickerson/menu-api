@@ -1,0 +1,1 @@
+"""Menu transcription providers, kept separate from the installed SDK packages."""

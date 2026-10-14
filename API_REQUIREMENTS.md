@@ -20,3 +20,14 @@ Any other errors that make sense to include
 A special "dummy" flag is considered on the post input which tells menu-api to return a stored, dummy menu instead of making a call to OpenAI. This is so that the frontend can be developed without always having to call OpenAI.
 
 
+## Version 2
+
+Add a second path, which provides the same functionality but uses
+the Anthropic API and the Haiku 5.5 model.
+
+The path should be chosen by setting a variable in the codebase to either "OPENAI" or "ANTHROPIC". No need to rely on an env variable or external parameter.
+
+If it makes sense, use a different python file for the OPENAI path and the ANTHROPIC path, to make the codebase easier to understand.
+
+The anthropic api key is the "ANTHROPIC_API_KEY" field in the menu_api_secrets secret.
+

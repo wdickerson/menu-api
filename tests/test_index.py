@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import sys
 import unittest
 from unittest.mock import Mock, patch
 
@@ -14,10 +15,15 @@ from openai import AsyncOpenAI
 
 
 HANDLER_PATH = Path(__file__).resolve().parents[1] / "lambda" / "index.py"
+# Source is not yet copied into the deployment package when CodeBuild runs tests.
+sys.path.insert(0, str(HANDLER_PATH.parent))
 spec = importlib.util.spec_from_file_location("menu_handler", HANDLER_PATH)
 assert spec is not None and spec.loader is not None
 handler = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(handler)
+
+openai_provider = handler.openai_provider
+shared = importlib.import_module("providers.shared")
 
 # Signature-only fixtures; full image decoding belongs to OpenAI.
 PNG_BYTES = b"\x89PNG\r\n\x1a\ntest-image\x00\xff\x80\r\n"
@@ -45,14 +51,15 @@ class MenuHandlerTests(unittest.TestCase):
             "ALLOWED_ORIGIN": "https://menu.example.com", "ENABLE_LIVE_TRANSCRIPTION": "true",
             "OPENAI_API_KEY": "test-key-not-a-real-secret",
         }, clear=True))
-        self.start_patch(patch.object(handler, "_secret_cache", None))
-        self.aws = self.start_patch(patch.object(handler.boto3, "client"))
+        self.start_patch(patch.object(handler, "TRANSCRIPTION_PROVIDER", "OPENAI"))
+        self.start_patch(patch.object(shared, "_api_key_cache", {}))
+        self.aws = self.start_patch(patch.object(shared.boto3, "client"))
         self.aws.side_effect = AssertionError("Unexpected AWS call")
         self.requests = []
         self.http_status = 200
         self.http_body = self.completion(MENU)
         self.network_error = None
-        self.openai = self.start_patch(patch.object(handler.openai, "AsyncOpenAI", side_effect=self.make_client))
+        self.openai = self.start_patch(patch.object(openai_provider.openai_sdk, "AsyncOpenAI", side_effect=self.make_client))
         self.log = self.start_patch(patch.object(handler, "logger"))
 
     def start_patch(self, patcher):
@@ -109,10 +116,10 @@ class MenuHandlerTests(unittest.TestCase):
         self.assertTrue(data["error"]["message"])
         return result, data
 
-    def assert_options(self, sent, *, model=None, effort=None):
-        """Check configured defaults and request overrides, not default literals."""
-        model = handler.DEFAULT_MODEL if model is None else model
-        effort = handler.DEFAULT_REASONING_EFFORT if effort is None else effort
+    def assert_provider_settings(self, sent, *, model=None, effort=None):
+        """Check code-owned settings in the JSON sent to the provider SDK."""
+        model = openai_provider.DEFAULT_MODEL if model is None else model
+        effort = openai_provider.DEFAULT_REASONING_EFFORT if effort is None else effort
         self.assertEqual(sent["model"], model)
         if model == "gpt-4.1-mini":
             self.assertNotIn("reasoning_effort", sent)
@@ -128,13 +135,13 @@ class MenuHandlerTests(unittest.TestCase):
         self.assertEqual(str(request.url), "https://api.openai.com/v1/chat/completions")
         self.assertEqual(request.headers["authorization"], "Bearer test-key-not-a-real-secret")
         sent = json.loads(request.content)
-        self.assert_options(sent)
-        self.assertEqual(sent["messages"][0], {"role": "system", "content": handler.SYSTEM_PROMPT})
+        self.assert_provider_settings(sent)
+        self.assertEqual(sent["messages"][0], {"role": "system", "content": shared.MENU_TRANSCRIPTION_PROMPT})
         self.assertFalse(sent["store"])
         self.assertIsInstance(sent["max_completion_tokens"], int)
         self.assertGreater(sent["max_completion_tokens"], 0)
         self.assertTrue(sent["response_format"]["json_schema"]["strict"])
-        self.assertEqual(sent["response_format"]["json_schema"]["schema"], handler.TRANSCRIPTION_SCHEMA)
+        self.assertEqual(sent["response_format"]["json_schema"]["schema"], shared.MENU_TRANSCRIPTION_SCHEMA)
         self.assertEqual(sent["messages"][1]["content"][1]["image_url"], {"url": PNG, "detail": "high"})
         self.assertEqual(self.openai.call_args.kwargs["max_retries"], 0)
         self.aws.assert_not_called()
@@ -215,7 +222,7 @@ class MenuHandlerTests(unittest.TestCase):
         self.openai.assert_not_called()
 
     def test_unknown_fields_rejected(self):
-        for field in ("apiKey", "base_url", "imageUrl", "prompt", "reasoningEffort"):
+        for field in ("apiKey", "base_url", "imageUrl", "prompt", "unexpected_field"):
             self.assert_error(400, "invalid_request", fields=[(field, "private-value")])
         self.assert_error(400, "invalid_request", files=[("images[]", ("menu.png", PNG_BYTES, "image/png"))])
 
@@ -343,121 +350,70 @@ class MenuHandlerTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-4.1", "OPENAI_REASONING_EFFORT": "high"}):
             self.invoke()
         sent = json.loads(self.requests[-1].content)
-        self.assert_options(sent)
+        self.assert_provider_settings(sent)
 
-    def test_request_model_and_effort_overrides(self):
-        result, _ = self.invoke(fields=[("model", "gpt-6.1-sol"), ("reasoning_effort", "low")])
+    def test_changed_code_defaults_are_used_on_successive_requests_and_restored(self):
+        original_model = openai_provider.DEFAULT_MODEL
+        original_effort = openai_provider.DEFAULT_REASONING_EFFORT
+        result, _ = self.invoke()
         self.assertEqual(result["statusCode"], 200)
-        sent = json.loads(self.requests[-1].content)
-        self.assertEqual(sent["model"], "gpt-6.1-sol")
-        self.assertEqual(sent["reasoning_effort"], "low")
-        self.assertEqual(str(self.requests[-1].url), "https://api.openai.com/v1/chat/completions")
-        self.assertEqual(len(self.requests), 1)
-        # Settings never leak into a later request.
-        self.invoke()
-        sent = json.loads(self.requests[-1].content)
-        self.assert_options(sent)
-
-    def test_options_default_independently(self):
-        for fields, model, effort in (
-            ([("model", "gpt-6.1-sol")], "gpt-6.1-sol", handler.DEFAULT_REASONING_EFFORT),
-            ([("reasoning_effort", "none")], handler.DEFAULT_MODEL, "none"),
-        ):
-            with self.subTest(fields=fields):
-                result, _ = self.invoke(fields=fields)
+        self.assert_provider_settings(json.loads(self.requests[-1].content),
+                            model=original_model, effort=original_effort)
+        for model, effort in (("gpt-6-luna", "low"), ("gpt-6.1-sol", "high")):
+            with self.subTest(model=model, effort=effort):
+                with patch.object(openai_provider, "DEFAULT_MODEL", model), \
+                        patch.object(openai_provider, "DEFAULT_REASONING_EFFORT", effort):
+                    for _ in range(2):
+                        before = len(self.requests)
+                        result, _ = self.invoke()
+                        self.assertEqual(result["statusCode"], 200)
+                        self.assertEqual(len(self.requests), before + 1)
+                        self.assert_provider_settings(json.loads(self.requests[-1].content), model=model, effort=effort)
+                result, _ = self.invoke()
                 self.assertEqual(result["statusCode"], 200)
-                self.assert_options(json.loads(self.requests[-1].content), model=model, effort=effort)
-
-    def test_changed_code_defaults_are_used_without_leaking_overrides(self):
-        for model, effort in (("gpt-4.1-mini", "none"), ("gpt-6-luna", "none"),
-                              ("gpt-6.1-sol", "high")):
-            with self.subTest(model=model, effort=effort), \
-                    patch.object(handler, "DEFAULT_MODEL", model), \
-                    patch.object(handler, "DEFAULT_REASONING_EFFORT", effort):
-                for fields, expected_model, expected_effort in (
-                    ([], model, effort),
-                    ([("model", "gpt-6.1-sol")], "gpt-6.1-sol", effort),
-                    ([("reasoning_effort", "none")], model, "none"),
-                    ([("model", "gpt-6.1-sol"), ("reasoning_effort", "low")], "gpt-6.1-sol", "low"),
-                    ([], model, effort),
-                ):
-                    result, _ = self.invoke(fields=fields)
-                    self.assertEqual(result["statusCode"], 200)
-                    self.assert_options(json.loads(self.requests[-1].content),
-                                        model=expected_model, effort=expected_effort)
+                self.assert_provider_settings(json.loads(self.requests[-1].content),
+                                    model=original_model, effort=original_effort)
 
     def test_gpt_41_mini_defaults_effort_and_omits_upstream_parameter(self):
-        for fields in ([("model", "gpt-4.1-mini")],
-                       [("model", "gpt-4.1-mini"), ("reasoning_effort", "none")]):
-            with self.subTest(fields=fields), patch.object(handler, "DEFAULT_REASONING_EFFORT", "none"):
-                result, _ = self.invoke(fields=fields)
-                self.assertEqual(result["statusCode"], 200)
-                sent = json.loads(self.requests[-1].content)
-                self.assertEqual(sent["model"], "gpt-4.1-mini")
-                self.assertNotIn("reasoning_effort", sent)
-                self.assertEqual(sent["response_format"]["json_schema"]["strict"], True)
-                self.assertEqual(sent["messages"][1]["content"][1]["image_url"]["url"], PNG)
+        with patch.object(openai_provider, "DEFAULT_MODEL", "gpt-4.1-mini"):
+            for effort in ("none", "high"):
+                with self.subTest(effort=effort), \
+                        patch.object(openai_provider, "DEFAULT_REASONING_EFFORT", effort):
+                    result, _ = self.invoke()
+                    self.assertEqual(result["statusCode"], 200)
+                    sent = json.loads(self.requests[-1].content)
+                    self.assertEqual(sent["model"], "gpt-4.1-mini")
+                    self.assertNotIn("reasoning_effort", sent)
+                    self.assertEqual(sent["response_format"]["json_schema"]["strict"], True)
+                    self.assertEqual(sent["messages"][1]["content"][1]["image_url"]["url"], PNG)
         # Omitting it for Mini must not alter subsequent reasoning-model requests.
-        self.invoke(fields=[("model", "gpt-6-luna"), ("reasoning_effort", "none")])
-        sent = json.loads(self.requests[-1].content)
-        self.assertEqual(sent["model"], "gpt-6-luna")
-        self.assertEqual(sent["reasoning_effort"], "none")
+        result, _ = self.invoke()
+        self.assertEqual(result["statusCode"], 200)
+        self.assert_provider_settings(json.loads(self.requests[-1].content))
 
-    def test_gpt_41_mini_rejects_non_none_effort(self):
-        for effort in ("minimal", "low", "medium", "high", "xhigh", "max"):
-            self.assert_error(400, "invalid_request", fields=[("model", "gpt-4.1-mini"),
-                                                            ("reasoning_effort", effort)])
-        self.openai.assert_not_called()
-        self.aws.assert_not_called()
+    def test_each_code_owned_recognized_effort_is_forwarded(self):
+        with patch.object(openai_provider, "DEFAULT_MODEL", "gpt-6.1-sol"):
+            for effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
+                with self.subTest(effort=effort), \
+                        patch.object(openai_provider, "DEFAULT_REASONING_EFFORT", effort):
+                    result, _ = self.invoke()
+                    self.assertEqual(result["statusCode"], 200)
+                    self.assert_provider_settings(json.loads(self.requests[-1].content), model="gpt-6.1-sol", effort=effort)
 
-    def test_each_recognized_effort_is_forwarded(self):
-        for effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
-            result, _ = self.invoke(fields=[("model", "gpt-6.1-sol"), ("reasoning_effort", effort)])
-            self.assertEqual(result["statusCode"], 200)
-            self.assertEqual(json.loads(self.requests[-1].content)["reasoning_effort"], effort)
-
-    def test_invalid_model_and_effort_are_rejected_before_paid_calls(self):
-        for model in ("", " ", "gpt model", "gpt-6-luna\n", "https://example.com/model", "é", "a" * 129):
-            self.assert_error(400, "invalid_request", fields=[("model", model)])
-        for effort in ("", "None", "auto", "low ", "invalid", "é", "x" * 128):
-            self.assert_error(400, "invalid_request", fields=[("reasoning_effort", effort)])
-        self.openai.assert_not_called()
-        self.aws.assert_not_called()
-
-    def test_option_fields_cannot_be_duplicated_or_files(self):
-        for key, value in (("model", "gpt-6-luna"), ("reasoning_effort", "none")):
-            self.assert_error(400, "invalid_request", fields=[(key, value), (key, value)])
-            self.assert_error(400, "invalid_request", files=[(key, ("option.txt", value.encode(), "text/plain"))])
-        self.openai.assert_not_called()
-
-    def test_all_thirteen_parts_and_options_after_files(self):
-        files = [PNG_FILE] * 10 + [("dummy", (None, "false")),
-                                   ("model", (None, "gpt-6.1-sol")),
-                                   ("reasoning_effort", (None, "low"))]
+    def test_eleven_parts_with_dummy_after_files_and_twelve_parts_rejected(self):
+        files = [PNG_FILE] * 10 + [("dummy", (None, "false"))]
         result, _ = self.invoke(files=files)
         self.assertEqual(result["statusCode"], 200)
         sent = json.loads(self.requests[-1].content)
-        self.assertEqual(sent["model"], "gpt-6.1-sol")
-        self.assertEqual(sent["reasoning_effort"], "low")
+        self.assert_provider_settings(sent)
         self.assertEqual(len(sent["messages"][1]["content"]), 11)
-
-    def test_dummy_accepts_valid_options_without_openai(self):
-        result, menu = self.invoke(files=[], fields=[("dummy", "true"), ("model", "gpt-6.1-sol"),
-                                                     ("reasoning_effort", "low")])
-        self.assertEqual(result["statusCode"], 200)
-        self.assertEqual(menu["restaurantName"], "Rough & Tumble")
-        self.assert_error(400, "invalid_request", files=[], fields=[("dummy", "true"), ("reasoning_effort", "invalid")])
-        self.openai.assert_not_called()
+        self.assertEqual(len(self.requests), 1)
+        with patch.object(openai_provider, "transcribe_menu") as transcribe:
+            self.assert_error(400, "invalid_request", files=files + [PNG_FILE])
+        transcribe.assert_not_called()
+        self.openai.assert_called_once()
+        self.assertEqual(len(self.requests), 1)
         self.aws.assert_not_called()
-
-    def test_upstream_rejects_incompatible_or_unavailable_model_options(self):
-        for param in ("model", "reasoning_effort"):
-            self.http_status = 400
-            self.http_body = {"error": {"code": "unsupported_value", "param": param,
-                                        "message": "private-upstream-detail"}}
-            result, _ = self.assert_error(400, "unsupported_model_options",
-                                          fields=[("model", "gpt-6.1-sol"), ("reasoning_effort", "none")])
-            self.assertNotIn("private-upstream-detail", result["body"])
 
     def test_menu_detection_errors(self):
         for status, code in (("no_menu", "no_menu_found"), ("illegible_text", "illegible_text")):
@@ -515,7 +471,7 @@ class MenuHandlerTests(unittest.TestCase):
             (400, "invalid_image", 400, "invalid_image"),
             (400, "invalid_image_format", 400, "invalid_image"),
             (400, "bad_schema", 502, "openai_failure"),
-            (404, "model_not_found", 400, "unsupported_model_options"),
+            (404, None, 502, "openai_failure"),
             (500, None, 502, "openai_failure"), (503, None, 502, "openai_failure"),
             (504, None, 504, "openai_timeout"),
         ]
@@ -547,7 +503,7 @@ class MenuHandlerTests(unittest.TestCase):
         context = Mock()
         context.get_remaining_time_in_millis.return_value = 9000
         self.invoke(context=context)
-        self.assertEqual(self.openai.call_args.kwargs["timeout"], min(handler.OPENAI_TIMEOUT_SECONDS, 6))
+        self.assertEqual(self.openai.call_args.kwargs["timeout"], min(openai_provider.TIMEOUT_SECONDS, 6))
         context.get_remaining_time_in_millis.return_value = 2000
         before = len(self.requests)
         self.assert_error(504, "openai_timeout", context=context)
@@ -556,14 +512,14 @@ class MenuHandlerTests(unittest.TestCase):
     def test_elapsed_deadline_cancels_pending_request(self):
         cancelled = []
 
-        async def slow_request(*args):
+        async def slow_request(*_):
             try:
                 await asyncio.Future()
             finally:
                 cancelled.append(True)
 
-        with patch.object(handler, "request_completion", side_effect=slow_request), \
-                patch.object(handler, "OPENAI_TIMEOUT_SECONDS", 0.01):
+        with patch.object(openai_provider, "_request_completion", side_effect=slow_request), \
+            patch.object(openai_provider, "TIMEOUT_SECONDS", 0.01):
             self.assert_error(504, "openai_timeout")
         self.assertEqual(cancelled, [True])
 
@@ -575,20 +531,20 @@ class MenuHandlerTests(unittest.TestCase):
 
     def configure_secret(self, value):
         os.environ.pop("OPENAI_API_KEY", None)
-        os.environ["OPENAI_SECRET_ID"] = "openai_menu"
+        os.environ["MENU_API_SECRET_ID"] = "menu_api_secrets"
         self.aws.side_effect = None
         self.aws.return_value.get_secret_value.return_value = {"SecretString": value}
 
     def test_secret_fetch_cache_expiry_and_rotation(self):
         self.configure_secret('{"OPENAI_API_KEY": "first-test-key"}')
-        with patch.object(handler.time, "monotonic", return_value=100):
+        with patch.object(shared.time, "monotonic", return_value=100):
             self.invoke()
             self.invoke()
         self.aws.assert_called_once()
         self.assertEqual(self.aws.call_args.kwargs["config"].retries["total_max_attempts"], 1)
-        self.aws.return_value.get_secret_value.assert_called_once_with(SecretId="openai_menu")
+        self.aws.return_value.get_secret_value.assert_called_once_with(SecretId="menu_api_secrets")
         self.aws.return_value.get_secret_value.return_value = {"SecretString": '{"OPENAI_API_KEY": "rotated-test-key"}'}
-        with patch.object(handler.time, "monotonic", return_value=101 + handler.SECRET_CACHE_SECONDS):
+        with patch.object(shared.time, "monotonic", return_value=101 + shared.SECRET_CACHE_SECONDS):
             self.invoke()
         self.assertEqual(self.requests[-1].headers["authorization"], "Bearer rotated-test-key")
         self.assertEqual(self.aws.call_count, 2)
@@ -596,13 +552,47 @@ class MenuHandlerTests(unittest.TestCase):
     def test_changing_secret_id_invalidates_cache(self):
         self.configure_secret('{"OPENAI_API_KEY": "first-test-key"}')
         self.invoke()
-        os.environ["OPENAI_SECRET_ID"] = "other_secret"
+        os.environ["MENU_API_SECRET_ID"] = "other_secret"
         self.invoke()
         self.assertEqual(self.aws.call_count, 2)
 
+    def test_shared_secret_uses_only_openai_key(self):
+        self.configure_secret(json.dumps({
+            "OPENAI_API_KEY": "openai-test-key",
+            "ANTHROPIC_API_KEY": "anthropic-test-key",
+            "GEMINI_API_KEY": "gemini-test-key",
+            "GOOGLE_PLACES_API_KEY": "places-test-key",
+            "OTHER_SECRET": {"unused": True},
+        }))
+        result, _ = self.invoke()
+        self.assertEqual(result["statusCode"], 200)
+        self.aws.return_value.get_secret_value.assert_called_once_with(SecretId="menu_api_secrets")
+        self.assertEqual(self.requests[-1].headers["authorization"], "Bearer openai-test-key")
+        self.assertEqual(len(self.requests), 1)
+
+    def test_shared_secret_id_is_required_and_legacy_variables_are_ignored(self):
+        os.environ.pop("OPENAI_API_KEY")
+        os.environ["AI_SECRET_ID"] = "ignored-secret"
+        os.environ["OPENAI_SECRET_ID"] = "ignored-secret"
+        for secret_id in (None, ""):
+            with self.subTest(secret_id=secret_id):
+                if secret_id is None:
+                    os.environ.pop("MENU_API_SECRET_ID", None)
+                else:
+                    os.environ["MENU_API_SECRET_ID"] = secret_id
+                self.assert_error(503, "api_not_configured")
+        self.aws.assert_not_called()
+        self.openai.assert_not_called()
+
+    def test_shared_secret_requires_openai_key(self):
+        self.configure_secret('{"ANTHROPIC_API_KEY": "unused-test-key"}')
+        self.assert_error(503, "api_not_configured")
+        self.aws.return_value.get_secret_value.assert_called_once_with(SecretId="menu_api_secrets")
+        self.openai.assert_not_called()
+
     def test_secret_failures_and_bad_values_are_safe(self):
         for value in ("not json", "{}", "[]", '{"OPENAI_API_KEY": null}', '{"OPENAI_API_KEY": ""}',
-                      '{"OPENAI_API_KEY": "bad key"}'):
+                      '{"OPENAI_API_KEY": "bad key"}', '{"ANTHROPIC_API_KEY": "unused-test-key"}'):
             self.configure_secret(value)
             self.assert_error(503, "api_not_configured")
         self.aws.return_value.get_secret_value.side_effect = RuntimeError("private-secret")
@@ -612,12 +602,12 @@ class MenuHandlerTests(unittest.TestCase):
         self.openai.assert_not_called()
 
     def test_environment_key_takes_precedence(self):
-        os.environ["OPENAI_SECRET_ID"] = "not-read"
+        os.environ["MENU_API_SECRET_ID"] = "not-read"
         self.invoke()
         self.aws.assert_not_called()
 
     def test_unexpected_errors_do_not_leak_details(self):
-        with patch.object(handler, "transcribe", side_effect=RuntimeError("private-secret")):
+        with patch.object(openai_provider, "transcribe_menu", side_effect=RuntimeError("private-secret")):
             result, _ = self.assert_error(500, "internal_error")
         self.assertNotIn("private-secret", result["body"])
         self.assertNotIn("private-secret", str(self.log.mock_calls))

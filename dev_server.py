@@ -5,6 +5,7 @@ import base64
 import importlib.util
 import json
 from pathlib import Path
+import sys
 
 from dotenv import load_dotenv
 from flask import Flask, Response, request
@@ -13,8 +14,11 @@ from werkzeug.serving import is_running_from_reloader
 
 
 API_ROOT = Path(__file__).resolve().parent
+LAMBDA_ROOT = API_ROOT / "lambda"
 ENV_FILE = API_ROOT / ".env"
-spec = importlib.util.spec_from_file_location("menu_lambda", API_ROOT / "lambda" / "index.py")
+if str(LAMBDA_ROOT) not in sys.path:
+    sys.path.insert(0, str(LAMBDA_ROOT))
+spec = importlib.util.spec_from_file_location("menu_lambda", LAMBDA_ROOT / "index.py")
 assert spec is not None and spec.loader is not None
 handler = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(handler)
@@ -36,7 +40,7 @@ def create_app(*, load_environment: bool = True) -> Flask:
     app.config["MAX_CONTENT_LENGTH"] = handler.MAX_BODY_BYTES
 
     @app.errorhandler(RequestEntityTooLarge)
-    def too_large(_error: RequestEntityTooLarge) -> Response:
+    def too_large(_: RequestEntityTooLarge) -> Response:
         return Response(json.dumps({"error": {
             "code": "request_too_large",
             "message": f"Request body exceeds {handler.MAX_BODY_BYTES:,} bytes.",

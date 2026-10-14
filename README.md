@@ -1,4 +1,66 @@
-# Menu API — Version 1
+# Menu API — Version 2
+
+## Choose the transcription provider
+
+Set `TRANSCRIPTION_PROVIDER` in [lambda/index.py](lambda/index.py) to exactly
+`"OPENAI"` or `"ANTHROPIC"`, then release the API code. This selects an internal implementation
+path, **not a second HTTP endpoint**: both use **POST /menus**, the same uploads,
+dummy mode, success shape, validation, and live-transcription gate. Provider
+selection cannot be overridden by an environment variable or request field.
+No frontend, CloudFormation, or IAM changes are needed.
+
+The Anthropic path uses **Claude Haiku 5.5** (`claude-haiku-5-5`, defined by
+`DEFAULT_MODEL` in [lambda/providers/anthropic.py](lambda/providers/anthropic.py))
+and the Messages API with JSON-schema
+structured output. Add **`ANTHROPIC_API_KEY`** to the existing **`menu_api_secrets`**
+JSON secret. The existing `MENU_API_SECRET_ID` setting selects that shared secret.
+Only the chosen provider's key is read; an OpenAI key is never used as an Anthropic
+fallback. Secret caches are scoped to both secret ID and provider key field.
+For local development, `ANTHROPIC_API_KEY` in the process environment or local
+dotenv file takes precedence over Secrets Manager, just like `OPENAI_API_KEY`.
+
+Models and reasoning settings are configured in the provider source. To compare
+settings locally, edit `DEFAULT_MODEL` and
+`DEFAULT_REASONING_EFFORT` in [lambda/providers/openai.py](lambda/providers/openai.py),
+or `DEFAULT_MODEL` in [lambda/providers/anthropic.py](lambda/providers/anthropic.py);
+the development server reloads Python changes automatically. A production settings
+change requires an API code release. There is no automatic retry or cross-provider fallback.
+All uploaded images are included in a single paid request to the selected provider.
+Anthropic requests keep thinking disabled. If thinking metadata is nevertheless
+returned, the parser skips it and validates only the menu text.
+
+Anthropic-specific error codes are `anthropic_not_funded`,
+`anthropic_authentication_failed`, `anthropic_rate_limited`, and
+`anthropic_model_unavailable` (HTTP 503); `anthropic_unavailable` (HTTP 502 for
+connection failures, 503 for overload); `anthropic_failure` and
+`invalid_anthropic_response` (HTTP 502); and `anthropic_timeout` (HTTP 504).
+Menu detection, invalid-image, refusal, and incomplete-transcription errors use
+the same codes as the OpenAI path. Upstream error messages and keys are not exposed.
+Both paths enforce a 20-second elapsed deadline, capped by remaining Lambda time
+minus three seconds, with SDK retries disabled.
+
+Offline tests cover both real provider SDKs with mocked HTTP transports; no paid
+requests or AWS calls are made. Install the updated production dependencies before
+running the local server or tests.
+
+## Code organization
+
+- [lambda/index.py](lambda/index.py): gateway request parsing, image validation,
+   dummy mode, live-transcription gate, provider selection, and HTTP responses.
+- [lambda/providers/openai.py](lambda/providers/openai.py): OpenAI defaults and
+   Chat Completions request, response parsing, and errors.
+- [lambda/providers/anthropic.py](lambda/providers/anthropic.py): Haiku defaults,
+   Messages request, response parsing (including thinking metadata), and errors.
+- [lambda/providers/shared.py](lambda/providers/shared.py): `MenuImage`, `ApiError`,
+   shared prompt/schema, provider-scoped credentials, elapsed deadlines, and menu validation.
+
+Both provider modules expose `transcribe_menu`. Images are validated and encoded
+once as provider-neutral `MenuImage` values; each provider builds its own SDK image
+blocks. Provider source lives inside a package so the requested module filenames
+do not shadow the installed OpenAI and Anthropic SDKs. The local server and tests
+add only the Lambda source directory—not the provider directory—to their import path.
+The existing deployment pipeline recursively packages this directory; no template
+changes are required.
 
 ## Start the local API (automatic reload)
 
@@ -28,17 +90,18 @@ curl http://127.0.0.1:8000/menus \
    -H 'Content-Type: application/json' --data '{"dummy":true}'
 ```
 
-For intentional **paid** transcription, put your real `OPENAI_API_KEY` in the
+For intentional **paid** transcription, put the selected provider's real
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in the
 local dotenv file and set `ENABLE_LIVE_TRANSCRIPTION=true` there. Do not put keys
 in request fields, frontend configuration, logs, or source control. Alternatively,
-configure `OPENAI_SECRET_ID` and AWS credentials using a secure local mechanism.
-Never commit the local dotenv file. Model/effort remain per-request form fields.
+configure `MENU_API_SECRET_ID` and AWS credentials using a secure local mechanism.
+Never commit the local dotenv file. Model and reasoning settings live in the
+provider source code.
 
 Run all offline checks with development dependencies installed:
 
 ```sh
 python -m unittest discover -s tests -v
-python -m unittest discover -s dev-tests -v
 ```
 
 The local adapter forwards raw bodies as binary API Gateway events to the unchanged
@@ -53,7 +116,7 @@ and packages only the Lambda directory. Production Lambda never loads dotenv.
 ## Production API
 
 Python Lambda (`index.lambda_handler`) behind API Gateway REST **POST /menus**.
-Transcribes 1–10 menu images using OpenAI vision and strict structured output.
+Transcribes 1–10 menu images using OpenAI or Anthropic vision and strict structured output.
 Printed menus, counter boards, food-truck posters, and handwritten beer lists
 are supported through the transcription prompt. No database or image storage.
 This development-server addition does not change the frontend or its API URL.
@@ -67,34 +130,22 @@ files. Let the HTTP client generate the Content-Type header and boundary.
 | --- | --- | --- |
 | `images` | File | A JPEG, PNG, or WebP image. Repeat this exact field name for 1–10 files. |
 | `dummy` | Text (optional) | Exactly `true` or `false`; defaults to `false`. |
-| `model` | Text (optional) | OpenAI model ID; defaults to `DEFAULT_MODEL` in [lambda/index.py](lambda/index.py). |
-| `reasoning_effort` | Text (optional) | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; defaults to `DEFAULT_REASONING_EFFORT` in [lambda/index.py](lambda/index.py). |
 
-Options apply only to that request. Defaults are defined in Lambda code, not the
-template or environment. Not every model supports every effort; choose a vision
-model with strict structured output and access granted in your OpenAI project.
-For Sol, explicitly send `model=gpt-6.1-sol` and `reasoning_effort=low`.
-
-Omit both model options to use the code-owned defaults. To use **GPT-4.1 Mini**,
-explicitly send `model=gpt-4.1-mini` and `reasoning_effort=none`. Its effort may
-also be omitted when the code-owned default effort is `none`; other values
-return HTTP 400 before any paid call. The server always omits the reasoning
-parameter entirely from Mini's OpenAI request because Mini does not support it.
-Other models still receive the selected or code-owned default effort.
+These are the only accepted multipart fields.
 
 Images must belong to the same restaurant; order them in menu reading order.
-All images are sent together in **one** OpenAI request. The server converts the
-original bytes into data URLs internally; clients no longer encode images.
+All images are sent together in **one** request to the selected provider. The server
+encodes the original bytes internally (OpenAI data URLs or Anthropic base64 image
+blocks); clients do not encode images.
 
 - Use `images`, **not** `images[]`. Each part needs a nonempty filename. Filenames
-   are never used as paths or sent to OpenAI. Unknown fields and duplicate text
-   options are rejected. Model IDs are nonempty ASCII identifiers of at most 128
-   characters. Keys, prompts, and API-host overrides are never accepted.
+   are never used as paths or sent to either provider. Unknown fields and duplicate text
+   fields are rejected.
 - File types: JPEG, PNG, or WebP. No remote URLs, base64 text fields, JSON image
   arrays, PDFs, GIFs, or HEIC. Convert HEIC camera photos to JPEG first. Declared
   image MIME types must match file signatures. Missing/generic
   `application/octet-stream` types are inferred from signatures, not filenames.
-  OpenAI performs full image decoding; local signature checks alone cannot prove
+   The selected provider performs full image decoding; local signature checks alone cannot prove
   a file is valid or readable.
 
 ### Upload limits (no S3 required)
@@ -103,7 +154,7 @@ original bytes into data URLs internally; clients no longer encode images.
   uploading one file or ten. This replaces the old 2.8 MB image limit.
 - **4,600,000 bytes (4.6 decimal MB) for the complete multipart body**, including
   boundaries, part headers, and text fields.
-- At most 13 parts (ten files plus `dummy`, `model`, and `reasoning_effort`), eight headers per part, and 4,096
+- At most 11 parts (ten files plus `dummy`), eight headers per part, and 4,096
   bytes per part header. Files are parsed in bounded memory, not saved to disk.
 
 API Gateway treats multipart as binary and base64-wraps the body when invoking
@@ -115,8 +166,8 @@ not a guarantee for arbitrarily large headers/query strings/context metadata.
 AWS can reject oversized events before Lambda runs, using its own error format.
 API Gateway's 10 MB request limit does not increase Lambda's smaller limit.
 
-No application resizing or recompression occurs: accepted file bytes reach OpenAI
-unchanged. OpenAI may resize images for its vision model. If photos exceed these
+No application resizing or recompression occurs: accepted file bytes reach the provider
+unchanged. The provider may resize images for its vision model. If photos exceed these
 limits, crop/compress them or submit fewer files. Full-resolution photos are not
 guaranteed to fit merely because the request contains fewer than ten images.
 
@@ -125,13 +176,11 @@ guaranteed to fit merely because the request contains fewer than ten images.
 1. Select **POST**, using `ApiPostUrl` (`…/prod/menus`), and **No Auth**.
 2. Under **Body → form-data**, add a row named **`images`**, switch its type from
    **Text** to **File**, and choose your image. Repeat the row for more images.
-3. Optionally add **`dummy`**, **`model`**, and **`reasoning_effort`** as **Text**
-   fields. For Mini, explicitly select its model and `none` effort; for a reasoning model, select its
-   `model` and a compatible `reasoning_effort`.
+3. Optionally add **`dummy`** as a **Text** field with `true` or `false`.
 4. Remove any manually configured `Content-Type` header, especially the old
    `application/json` header. Postman must generate the multipart boundary.
 5. Click **Send**. Live requests require enabled transcription and a configured
-   secret, and incur OpenAI charges. Never put the OpenAI key in Postman.
+   secret, and incur charges from the selected provider. Never put API keys in Postman.
 
 Future browser clients can use `FormData.append('images', file)` for each file
 and send the FormData body directly without setting Content-Type themselves.
@@ -142,10 +191,10 @@ The local server does not modify the frontend or its API URL.
 Send a multipart **Text** field **`dummy=true`**, with no files. For compatibility,
 **`{"dummy": true}`** with `Content-Type: application/json` is also supported.
 JSON is limited to 1,024 bytes and is **only** accepted for this exact dummy shape.
-No images or credentials are required; neither Secrets Manager nor OpenAI is
+No images or credentials are required; neither Secrets Manager nor either provider is
 called. With multipart dummy mode, file contents are not transcribed or validated
-as images, but body/file-size, option validation, framing, and count limits still
-apply. Valid model/effort options have no effect on the returned dummy menu.
+as images, but body/file-size, dummy-field validation, framing, and count limits still
+apply. Unknown fields are rejected.
 The stored fixture is
 [lambda/dummy-menu.json](lambda/dummy-menu.json).
 It is a snapshot of the frontend's Rough & Tumble restaurant name and all 11 menu
@@ -187,7 +236,6 @@ Clients should branch on `code`, not message wording.
 | HTTP | Codes | Meaning |
 | --- | --- | --- |
 | 400 | `invalid_json`, `invalid_body`, `invalid_multipart`, `invalid_request`, `invalid_images`, `invalid_image`, `unsupported_image_type` | Correct the request, multipart framing, or image files. |
-| 400 | `unsupported_model_options` | OpenAI rejected an unavailable model or incompatible reasoning effort. |
 | 405 | `method_not_allowed` | Handler accepts POST only; gateway serves OPTIONS. |
 | 413 | `request_too_large`, `images_too_large` | Resize/compress images. |
 | 415 | `unsupported_media_type` | Use multipart/form-data for files; JSON is allowed only for dummy mode. |
@@ -215,25 +263,26 @@ localhost by that gateway configuration; Lambda headers cannot override it.
 AWS-level rejections (including throttling, oversized invocation events, and
 unsupported routes/methods) use AWS's own response format, not this error envelope.
 
-## Put the OpenAI key in the right place
+## Put API credentials in the shared application secret
 
 ### AWS deployment — recommended
 
 1. In the [OpenAI API platform](https://platform.openai.com/api-keys), create a
    dedicated project API key with permission to create Chat Completions and use
-   `gpt-4.1-mini`. Enable API billing/credits for that project. A ChatGPT
+   the code-owned model. Enable API
+   billing/credits for that project. A ChatGPT
    subscription does **not** fund API usage. Configure usage alerts and limits;
    project budget alerts alone are not a guaranteed hard spending cap.
 2. In **AWS Secrets Manager → us-east-1 → Store a new secret → Other type of
-   secret**, add exactly this key/value pair:
+   secret**, add this key/value pair:
    - **Key:** `OPENAI_API_KEY`
    - **Value:** paste the actual OpenAI key directly in the AWS console.
 3. Use the default **`aws/secretsmanager`** encryption key. Name the secret
-   **`openai_menu`**. No automatic rotation is configured. This is separate from
+   **`menu_api_secrets`**. No automatic rotation is configured. This is separate from
    the existing `github_menu` secret. Never paste the key into chat, source code,
    CloudFormation parameters, build variables, or frontend configuration.
 4. Wait until API deployments are idle, then update the infrastructure template
-   with `OpenAISecretName=openai_menu` and initially
+   with `MenuApiSecretName=menu_api_secrets` and initially
    `EnableLiveTranscription=false`. Acknowledge named IAM resources. Update the
   stack **before** releasing this API code: multipart needs the binary-media
   configuration and a new gateway deployment. Explicitly set the flag to false
@@ -245,6 +294,23 @@ unsupported routes/methods) use AWS's own response format, not this error envelo
    **`EnableLiveTranscription=true`**. POST real images to verify transcription.
    No frontend deployment or frontend key configuration is needed.
 
+**Existing stacks:** the API requires `MENU_API_SECRET_ID`, as set by the current
+template; older secret environment variable names are not supported. Create
+`menu_api_secrets` with the working OpenAI key, or set `MenuApiSecretName` to your
+existing secret name. Update the stack, wait for completion, then release the
+API code. If migrating from older configuration/code, plan a maintenance window:
+live transcription may be unavailable until both updates finish. Dummy mode
+remains available. Never overlap stack and pipeline deployments.
+
+The secret can contain both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` and, in future, `GEMINI_API_KEY`.
+Add provider fields to the same JSON secret without updating CloudFormation or
+IAM. The handler reads `OPENAI_API_KEY` when `TRANSCRIPTION_PROVIDER="OPENAI"`
+and `ANTHROPIC_API_KEY` when `TRANSCRIPTION_PROVIDER="ANTHROPIC"`. Gemini is not
+implemented. Switching providers requires an API code release, not a stack update.
+Other API credentials, such as a Google Places API key, and application secrets
+can go into this same secret. Adding fields requires no stack update; using them
+requires the corresponding application code.
+
 The Lambda receives only the secret **name**, retrieves the key at runtime, and
 caches it in memory for at most five minutes. IAM grants `GetSecretValue` for
 that named secret only; build/frontend roles do not receive access. The key is
@@ -252,7 +318,7 @@ not copied into Lambda environment variables or the CloudFormation template.
 For a customer-managed KMS key, additional narrowly scoped `kms:Decrypt` and key
 policy permissions would be required; the supplied setup assumes the default key.
 
-To rotate, create a replacement OpenAI key, edit `OPENAI_API_KEY` in the secret,
+To rotate, create a replacement provider key, edit its corresponding field in the secret,
 allow at least five minutes for warm Lambda caches to refresh, verify a real
 request, then revoke the old key. No code release is required. Do not revoke the
 old key before cache expiry unless immediate revocation is necessary.
@@ -262,7 +328,8 @@ old key before cache expiry unless immediate revocation is necessary.
 Use **Python 3.13** (matching Lambda/CodeBuild); the multipart dependency requires
 at least Python 3.10, so the old Python 3.9 environment no longer suffices.
 Install [requirements.txt](requirements.txt) into a virtual environment with
-`python -m pip install -r requirements.txt`. Set `OPENAI_API_KEY` in the process
+`python -m pip install -r requirements.txt`. Set the selected provider's
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in the process
 environment using a secure local secret mechanism and set
 `ENABLE_LIVE_TRANSCRIPTION=true` for intentional paid calls. A local environment
 key takes precedence over Secrets Manager. The production handler does not load
@@ -270,7 +337,7 @@ dotenv files; the local server above does. Do not commit any credentials.
 
 Offline tests and dummy mode need neither a key nor AWS credentials. Run
 `python -m unittest discover -s tests -v` from this repository root. Tests use the
-real OpenAI SDK with an in-memory HTTP transport; no paid requests are made.
+real OpenAI and Anthropic SDKs with in-memory HTTP transports; no paid requests are made.
 Multipart tests use a real HTTP client's encoder and simulate Gateway's binary
 event wrapping, including byte-preservation and maximum-size upload tests.
 
@@ -279,21 +346,24 @@ event wrapping, including byte-preservation and maximum-size upload tests.
 | Environment variable | Default / purpose |
 | --- | --- |
 | `ENABLE_LIVE_TRANSCRIPTION` | Handler fallback `false`; the current stack parameter defaults to `true`. Set it explicitly during deployment. |
-| `OPENAI_SECRET_ID` | Secret name or ARN; stack sets `openai_menu`. |
+| `MENU_API_SECRET_ID` | Shared application secret name or ARN; stack sets this from `MenuApiSecretName`, defaulting to `menu_api_secrets`. |
 | `OPENAI_API_KEY` | Optional local override; never set by the stack. |
+| `ANTHROPIC_API_KEY` | Optional local Anthropic override; never set by the stack. |
 | `ALLOWED_ORIGIN` | `https://menu.littleapp.io`; stack uses the configured frontend domain. |
 
-Defaults (`gpt-4.1-mini`, `none`, with effort omitted upstream for Mini) are
-defined in [lambda/index.py](lambda/index.py).
-Multipart `model` and `reasoning_effort` fields override them for one request;
-CloudFormation and environment variables do not select either option. Changing
-defaults requires a code release; comparing models needs only request fields.
-JSON remains exclusively for the exact `{"dummy":true}` shape, not model options
-or live uploads. No infrastructure changes are needed for these request options.
+OpenAI defaults are defined by `DEFAULT_MODEL` and `DEFAULT_REASONING_EFFORT` in
+[lambda/providers/openai.py](lambda/providers/openai.py); effort is omitted upstream for Mini.
+Anthropic's model is defined by `DEFAULT_MODEL` in
+[lambda/providers/anthropic.py](lambda/providers/anthropic.py). Choose a vision
+model with structured output and access granted in your provider account. Not every
+OpenAI model supports every reasoning effort. Edit the provider source to compare
+settings on the automatically reloading local server; production changes require
+an API code release. JSON supports the exact `{"dummy":true}` shape. No
+infrastructure changes are needed to change provider settings.
 
-The OpenAI call has a **20-second elapsed deadline**, capped further by remaining
+Each provider call has a **20-second elapsed deadline**, capped further by remaining
 Lambda time. Pending work is cancelled on timeout and the SDK never automatically
-retries. Cancellation does not guarantee OpenAI stops processing/billing the
+retries. Cancellation does not guarantee the provider stops processing/billing the
 request. Lambda has 512 MB and a 28-second timeout; API Gateway waits 29 seconds.
 Changing model or effort does not increase this deadline. Higher reasoning effort
 may time out even on a single image. Long menus or ten dense photos may time out:
@@ -307,20 +377,21 @@ the enabled endpoint and consume your API credits. The existing gateway throttle
 (5 requests/second, burst 10) is best-effort and is not a spending cap or per-user
 quota. Set `EnableLiveTranscription=false` to keep paid calls disabled. The current
 template defaults to `true`; review it explicitly before deploying.
-Caller-selected models may be more expensive than the default. Restrict model
+Choose code-configured models with cost in mind and restrict model
 access in the OpenAI project if necessary. Add authentication, per-user quotas,
 abuse controls, and enforced spending controls before broad public use. Turn the
 stack flag off to disable new paid requests.
 
 Images/menu text are not persisted by this application or logged, and raw upstream
-errors/keys are not returned or logged. Images are sent to OpenAI over HTTPS with
-`store=false`; this does not override OpenAI's applicable retention/abuse-monitoring
+errors/keys are not returned or logged. Images are sent to the selected provider
+over HTTPS. OpenAI requests use `store=false`; Anthropic requests use the Messages
+API. Neither path overrides its provider's applicable retention/abuse-monitoring
 policies. Do not enable SDK HTTP debug logging or gateway body logging in production.
 
 ## Repository and deployment
 
 Publish this directory's **contents** as the separate `menu-api` repository.
-Commit the handler, dummy fixture, tests, and [requirements.txt](requirements.txt).
+Commit the handler, provider package, dummy fixture, tests, and [requirements.txt](requirements.txt).
 CodeBuild installs dependencies into a staging directory using Linux/Python 3.13
 x86_64 wheels, runs offline tests, and packages dependencies plus the Lambda
 directory's contents at ZIP root. Tests and documentation are not deployed. Do
@@ -337,7 +408,7 @@ than risking corrupted image bytes. Never base64-encode files yourself in Postma
 No upload bucket or new AWS permissions are required.
 
 CloudFormation owns configuration and a historical inline bootstrap; the API
-pipeline owns Version 1 code releases. The bootstrap is intentionally unchanged
+pipeline owns Version 2 code releases. The bootstrap is intentionally unchanged
 and still has the old always-dummy behavior. Stack creation/replacement alone is
-**not** a Version 1 deployment: wait for the API pipeline. Serialize infrastructure
+**not** a Version 2 deployment: wait for the API pipeline. Serialize infrastructure
 and code releases, and rerun the API pipeline after a function replacement/reset.
