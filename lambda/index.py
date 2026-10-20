@@ -1,4 +1,4 @@
-"""Menu API v1.0.0, exposed as an API Gateway REST proxy."""
+"""Menu API v1.1.0, exposed as an API Gateway REST proxy."""
 
 import base64
 import binascii
@@ -24,6 +24,8 @@ MAX_BODY_BYTES = 4_600_000  # Complete multipart body, including boundaries/head
 MAX_IMAGE_BYTES = 4_500_000  # Combined original file bytes, not per file.
 MAX_IMAGES = 5
 MAX_JSON_BODY_BYTES = 1024  # JSON is retained only for {"dummy": true}.
+MAX_SEARCH_BODY_BYTES = 4096
+MAX_SEARCH_QUERY_LENGTH = 500
 
 TRANSCRIPTION_PROVIDER = "OPENAI"  # Set to "OPENAI" or "ANTHROPIC" in code only.
 
@@ -31,7 +33,7 @@ TEXT_FIELD_LIMITS = {b"dummy": 5}
 logger = logging.getLogger(__name__)
 
 
-def parse_payload(event):
+def parse_content_type(event):
     values = [value for key, value in (event.get("headers") or {}).items()
               if key.lower() == "content-type"]
     for key, entries in (event.get("multiValueHeaders") or {}).items():
@@ -45,7 +47,11 @@ def parse_payload(event):
         media_type, options = parse_options_header(values[0])
     except (ValueError, UnicodeError):
         raise ApiError(400, "invalid_request", "Invalid Content-Type header.") from None
-    media_type = media_type.lower()
+    return media_type.lower(), options
+
+
+def parse_payload(event):
+    media_type, options = parse_content_type(event)
     if media_type == b"application/json":
         return parse_dummy_json(decode_body(event, MAX_JSON_BODY_BYTES))
     if media_type != b"multipart/form-data":
@@ -57,6 +63,33 @@ def parse_payload(event):
         # Never attempt a lossy UTF-8/Latin-1 reconstruction of binary images.
         raise ApiError(400, "invalid_request", "Multipart data was not delivered as binary. Check API Gateway binary media configuration.")
     return parse_multipart(decode_body(event, MAX_BODY_BYTES), boundary)
+
+
+def parse_search_payload(event):
+    media_type, _ = parse_content_type(event)
+    if media_type != b"application/json":
+        raise ApiError(415, "unsupported_media_type", 'Send application/json with a "query" string.')
+
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate field")
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(decode_body(event, MAX_SEARCH_BODY_BYTES).decode("utf-8"),
+                             object_pairs_hook=unique_fields)
+    except (ValueError, TypeError, RecursionError):
+        raise ApiError(400, "invalid_json", "Body must be a valid JSON object with unique fields.") from None
+    if (not isinstance(payload, dict) or set(payload) != {"query"}
+            or not isinstance(payload["query"], str)):
+        raise ApiError(400, "invalid_request", 'Provide only a "query" string.')
+    query = payload["query"].strip()
+    if not 1 <= len(query) <= MAX_SEARCH_QUERY_LENGTH:
+        raise ApiError(400, "invalid_query", f"Describe the menu in 1–{MAX_SEARCH_QUERY_LENGTH} characters.")
+    return query
 
 
 def decode_body(event, max_bytes):
@@ -228,6 +261,14 @@ def lambda_handler(event, context):
         if event.get("httpMethod") != "POST":
             headers["Allow"] = "POST,OPTIONS"
             raise ApiError(405, "method_not_allowed", "Method not allowed. Use POST.")
+        path = event.get("resource") or event.get("path")
+        if path == "/menu_online_search":
+            query = parse_search_payload(event)
+            if os.environ.get("ENABLE_LIVE_SEARCH", "false").lower() != "true":
+                raise ApiError(503, "search_disabled", "Online menu search is currently disabled.")
+            return response(200, openai_provider.search_menus(query, context))
+        if path != "/menu_image_transcribe":
+            raise ApiError(404, "not_found", "Endpoint not found.")
         payload = parse_payload(event)
 
         if payload.get("dummy", False):

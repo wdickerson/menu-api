@@ -33,7 +33,8 @@ import openai
 import anthropic
 assert index.openai_provider.openai_sdk is openai
 assert index.anthropic_provider.anthropic_sdk is anthropic
-event = {'httpMethod': 'POST', 'headers': {'Content-Type': 'application/json'},
+event = {'httpMethod': 'POST', 'path': '/menu_image_transcribe',
+         'headers': {'Content-Type': 'application/json'},
          'body': '{"dummy":true}', 'isBase64Encoded': False}
 for provider in ('OPENAI', 'ANTHROPIC'):
     index.TRANSCRIPTION_PROVIDER = provider

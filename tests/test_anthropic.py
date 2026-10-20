@@ -65,7 +65,8 @@ class AnthropicHandlerTests(unittest.TestCase):
     def invoke(self, *, files=None, fields=None, context=None, dummy_json=False):
         event = upload_event(files, fields)
         if dummy_json:
-            event = {"httpMethod": "POST", "headers": {"Content-Type": "application/json"},
+            event = {"httpMethod": "POST", "path": "/menu_image_transcribe",
+                     "headers": {"Content-Type": "application/json"},
                      "body": '{"dummy":true}', "isBase64Encoded": False}
         response = handler.lambda_handler(event, context)
         self.assertEqual(response["headers"]["Cache-Control"], "no-store")

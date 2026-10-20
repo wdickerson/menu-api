@@ -1,4 +1,4 @@
-"""OpenAI menu transcription with code-owned settings, Responses, and response parsing."""
+"""OpenAI image transcription and online menu search with code-owned settings."""
 
 import asyncio
 import json
@@ -21,15 +21,22 @@ from .shared import (
     MenuImage,
     MENU_TRANSCRIPTION_PROMPT,
     MENU_TRANSCRIPTION_SCHEMA,
+    MENU_SEARCH_PROMPT,
+    MENU_SEARCH_SCHEMA,
     get_api_key,
     get_request_timeout,
     run_with_deadline,
+    run_search_with_deadline,
     validate_menu,
+    validate_search_results,
+    search_error,
 )
 
 
-DEFAULT_MODEL = "gpt-6-luna"
+DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_REASONING_EFFORT: ReasoningEffort = "none"
+SEARCH_MODEL = "gpt-6-luna"
+SEARCH_REASONING_EFFORT: ReasoningEffort = "medium"
 TIMEOUT_SECONDS = 20.0
 
 
@@ -62,7 +69,7 @@ async def _request_response(api_key, content, timeout):
     async with openai_sdk.AsyncOpenAI(api_key=api_key, base_url="https://api.openai.com/v1",
                                      timeout=timeout, max_retries=0) as client:
         return await client.responses.create(
-            model="gpt-6.1-sol",
+            model=DEFAULT_MODEL,
             service_tier="ultrafast",
             reasoning={"effort": "low"},
             instructions=MENU_TRANSCRIPTION_PROMPT,
@@ -76,6 +83,10 @@ async def _request_response(api_key, content, timeout):
 
 
 def parse_response(response):
+    return validate_menu(_parse_response_data(response), provider_name="OpenAI")
+
+
+def _parse_response_data(response):
     """Require a complete, non-refused Response before validating its menu text."""
     invalid = ApiError(502, "invalid_openai_response", "OpenAI returned an invalid response.")
     if not isinstance(response, Response):
@@ -126,7 +137,43 @@ def parse_response(response):
         data = json.loads(response.output_text)
     except (ValueError, TypeError, RecursionError):
         raise ApiError(502, "invalid_openai_response", "OpenAI returned an invalid menu.") from None
-    return validate_menu(data, provider_name="OpenAI")
+    return data
+
+
+def search_menus(query: str, context):
+    api_key = get_api_key("OPENAI_API_KEY")
+    timeout = get_request_timeout(context, provider_name="OpenAI", max_seconds=TIMEOUT_SECONDS)
+    try:
+        response = run_search_with_deadline(_request_search(api_key, query, timeout), timeout)
+        # Temporary debug output; remove before deploying to production.
+        return validate_search_results(json.loads(response.output_text), provider_name="OpenAI")
+    except (openai_sdk.APITimeoutError, asyncio.TimeoutError):
+        raise ApiError(504, "openai_timeout", "Menu search timed out. Please try again.") from None
+    except openai_sdk.APIStatusError as error:
+        raise search_error(map_api_error(error)) from None
+    except openai_sdk.APIConnectionError:
+        raise ApiError(502, "openai_unavailable", "Could not connect to OpenAI. Try again later.") from None
+    except openai_sdk.OpenAIError:
+        raise ApiError(502, "openai_failure", "OpenAI could not complete menu search.") from None
+    except ApiError as error:
+        raise search_error(error) from None
+    except (ValueError, TypeError, AttributeError, RecursionError):
+        raise ApiError(502, "invalid_openai_response", "OpenAI returned invalid menu search results.") from None
+
+
+async def _request_search(api_key, query, timeout):
+    async with openai_sdk.AsyncOpenAI(api_key=api_key, base_url="https://api.openai.com/v1",
+                                     timeout=timeout, max_retries=0) as client:
+        return await client.responses.create(
+            model=SEARCH_MODEL,
+            reasoning={"effort": SEARCH_REASONING_EFFORT},
+            instructions=MENU_SEARCH_PROMPT,
+            input=[{"role": "user", "content": [{"type": "input_text", "text": query}]}],
+            tools=[{"type": "web_search"}], tool_choice="required", max_tool_calls=3,
+            text={"format": {"type": "json_schema", "name": "menu_online_search",
+                             "strict": True, "schema": MENU_SEARCH_SCHEMA}},
+            max_output_tokens=4000, store=False,
+        )
 
 
 def map_api_error(error):

@@ -58,7 +58,8 @@ class RequestFieldTests(unittest.TestCase):
     def test_json_dummy_rejects_unknown_fields(self):
         for field, value in (("unexpected_field", "extra-value"), ("extra_field", "other-value")):
             self.assert_rejected({
-                "httpMethod": "POST", "headers": {"Content-Type": "application/json"},
+                "httpMethod": "POST", "path": "/menu_image_transcribe",
+                "headers": {"Content-Type": "application/json"},
                 "body": json.dumps({"dummy": True, field: value}), "isBase64Encoded": False,
             })
         self.assert_no_paid_calls()

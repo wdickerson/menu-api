@@ -46,9 +46,11 @@ def create_app(*, load_environment: bool = True) -> Flask:
             "message": f"Request body exceeds {handler.MAX_BODY_BYTES:,} bytes.",
         }}), status=413, headers=CORS_HEADERS, mimetype="application/json")
 
-    @app.route("/menus", methods=["POST", "OPTIONS", "GET", "HEAD", "PUT", "PATCH", "DELETE"],
+    @app.route("/menu_image_transcribe", methods=["POST", "OPTIONS", "GET", "HEAD", "PUT", "PATCH", "DELETE"],
                provide_automatic_options=False)
-    def menus() -> Response:
+    @app.route("/menu_online_search", methods=["POST", "OPTIONS", "GET", "HEAD", "PUT", "PATCH", "DELETE"],
+               provide_automatic_options=False)
+    def menu_operation() -> Response:
         if request.method == "OPTIONS":
             # API Gateway owns preflight in production; emulate it only locally.
             return Response(status=204, headers=CORS_HEADERS)

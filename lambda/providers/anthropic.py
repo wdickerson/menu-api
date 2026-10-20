@@ -38,7 +38,6 @@ def transcribe_menu(images: list[MenuImage], context):
     }} for image in images)
     try:
         message = asyncio.run(run_with_deadline(_request_message(api_key, content, timeout), timeout))
-        print(f"Anthropic response: {message}")
     except (anthropic_sdk.APITimeoutError, asyncio.TimeoutError):
         raise ApiError(504, "anthropic_timeout", "Menu transcription timed out. Try fewer or smaller images.") from None
     except anthropic_sdk.APIStatusError as error:
@@ -66,6 +65,10 @@ async def _request_message(api_key, content, timeout):
 
 
 def parse_response(message):
+    return validate_menu(_parse_response_data(message), provider_name="Anthropic")
+
+
+def _parse_response_data(message):
     """Read menu text only, skipping any thinking metadata returned by Haiku."""
     invalid = ApiError(502, "invalid_anthropic_response", "Anthropic returned an invalid menu. Try again.")
     if not isinstance(message, anthropic_sdk.types.Message):
@@ -89,7 +92,7 @@ def parse_response(message):
         data = json.loads("".join(texts))
     except (ValueError, TypeError, RecursionError):
         raise invalid from None
-    return validate_menu(data, provider_name="Anthropic")
+    return data
 
 
 def map_api_error(error):

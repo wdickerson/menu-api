@@ -37,10 +37,11 @@ def upload_event(files=None, fields=None):
     """Use a real HTTP client encoder, then emulate Gateway's binary wrapping."""
     parts = [(key, (None, value)) for key, value in (fields or [])]
     parts += files if files is not None else [PNG_FILE]
-    request = httpx.Request("POST", "https://menu.example.com/menus",
+    request = httpx.Request("POST", "https://menu.example.com/menu_image_transcribe",
                             files=parts or [("dummy", (None, "false"))])
     return {
-        "httpMethod": "POST", "body": base64.b64encode(request.read()).decode("ascii"),
+        "httpMethod": "POST", "path": "/menu_image_transcribe",
+        "body": base64.b64encode(request.read()).decode("ascii"),
         "isBase64Encoded": True, "headers": {"Content-Type": request.headers["content-type"]},
     }
 
@@ -99,6 +100,7 @@ class MenuHandlerTests(unittest.TestCase):
                      "isBase64Encoded": False, "headers": {"Content-Type": "application/json"}}
         else:
             event = upload_event(files, fields)
+        event["path"] = "/menu_image_transcribe"
         event["httpMethod"] = method
         if headers is not None:
             event["headers"] = headers
