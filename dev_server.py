@@ -50,6 +50,8 @@ def create_app(*, load_environment: bool = True) -> Flask:
                provide_automatic_options=False)
     @app.route("/menu_online_search", methods=["POST", "OPTIONS", "GET", "HEAD", "PUT", "PATCH", "DELETE"],
                provide_automatic_options=False)
+    @app.route("/menu_online_transcribe", methods=["POST", "OPTIONS", "GET", "HEAD", "PUT", "PATCH", "DELETE"],
+               provide_automatic_options=False)
     def menu_operation() -> Response:
         if request.method == "OPTIONS":
             # API Gateway owns preflight in production; emulate it only locally.

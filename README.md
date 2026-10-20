@@ -1,8 +1,10 @@
-# Menu API v1.1.0
+# Menu API v1.2.0
 
 Python Lambda behind API Gateway. `POST /menu_image_transcribe` transcribes menu
 photos through OpenAI or Anthropic. `POST /menu_online_search` finds possible
-menus on the web through OpenAI. See [API_REQUIREMENTS.md](API_REQUIREMENTS.md) for the contract.
+menus on the web through OpenAI. `POST /menu_online_transcribe` reads a selected
+online menu into the same JSON as image transcription.
+See [API_REQUIREMENTS.md](API_REQUIREMENTS.md) for the contract.
 
 ## Local development
 
@@ -34,15 +36,20 @@ Run offline tests with `python -m unittest discover -s tests -v`.
   `SEARCH_REASONING_EFFORT` (`medium`) control search in
   [lambda/providers/openai.py](lambda/providers/openai.py). Requests and environment
   variables cannot override these settings.
-- Paid calls require `ENABLE_LIVE_TRANSCRIPTION=true` for photos or
+- Online transcription has its own `ONLINE_TRANSCRIPTION_MODEL` and
+  `ONLINE_TRANSCRIPTION_REASONING_EFFORT` constants (currently Luna/`none`),
+  independent of both the image model and search model. It always uses OpenAI.
+- Paid calls require `ENABLE_LIVE_TRANSCRIPTION=true` for **both photo and online
+  transcription**, or
   `ENABLE_LIVE_SEARCH=true` for web search. Photos use the selected provider's
-  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`; search always requires `OPENAI_API_KEY`.
+  `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`; both online operations require `OPENAI_API_KEY`.
   Local environment values override the
   JSON secret selected by `MENU_API_SECRET_ID` (stack default: `menu_api_secrets`).
   Local dotenv loading is development-only; never commit keys or put them in the frontend.
 - The API is unauthenticated. CORS and gateway throttling are not spending caps.
-  Both flags default off in the handler. The stack defaults transcription on and
-  search off; explicitly opt into search with `EnableLiveSearch=true`.
+  Both flags default off in the handler. The current stack defaults both on;
+  explicitly disable paid operations until credentials and abuse/cost controls
+  are ready. No separate online-transcription enable flag exists.
 - Run tests before release: deployment does not run them. The API pipeline packages
   [requirements.txt](requirements.txt) and the Lambda contents at ZIP root using
   Linux/Python 3.13 x86_64 dependencies, not macOS wheels.
@@ -78,4 +85,38 @@ Run offline tests with `python -m unittest discover -s tests -v`.
   processing/retention policies still apply.
 - `/menus` was removed. Deploy the updated CloudFormation routes/permissions and
   Lambda code together, then rebuild/deploy the frontend; old clients must upgrade.
+
+## Online transcription contract — v1.2.0
+
+- Send `POST /menu_online_transcribe` with JSON
+  `{"query":"original search query","menu":{"venue_identifier":"Cafe Columbia City","menu_identifier":"Dinner","source_url":"https://example.com/menu.pdf","agent_instructions":"Read the selected dinner menu and preserve its sections."}}`.
+- `menu` is exactly one selected result object, not an array. Send all four
+  search fields, including `source_url`, plus the query that produced that result.
+  Only `query` and `menu` are accepted at the top level. Extra menu metadata is
+  ignored; its four fields need only be strings, without URL/provenance checks.
+  The trimmed query is 1–500 Unicode characters. The complete JSON body is
+  limited to 65,536 UTF-8 bytes; duplicate JSON keys are rejected.
+- Uses the same `ENABLE_LIVE_TRANSCRIPTION` / CloudFormation
+  `EnableLiveTranscription` flag as image transcription. `ENABLE_LIVE_SEARCH`
+  does not enable or disable this endpoint. Selecting Anthropic for photos does
+  not change online transcription's OpenAI provider or credentials.
+- One Responses request uses hosted web search to locate/read the selected menu
+  page or PDF, and structured output with the existing menu schema. The user
+  input sent to OpenAI contains exactly `source_url` and `agent_instructions`;
+  the user's query, nested menu object, and other menu fields are not forwarded. The response
+  is `{"isDummy":false,"restaurantName":"...","sections":[{"name":"...","items":["..."]}]}`.
+  Shared menu validation normalizes the output for the existing frontend/library.
+  Optional source/tool metadata is not used as a success gate.
+- Online transcription's `web_search` tool uses `filters.allowed_domains` with
+  the hostname parsed from `source_url`, without its scheme, port, path, or query.
+  OpenAI's domain filtering also includes subdomains. A missing/unparseable
+  hostname returns HTTP 400 `invalid_source_url`, never unrestricted search.
+  Initial menu discovery remains unrestricted.
+- All provider work has one 20-second deadline (capped by remaining Lambda time
+  minus three seconds), at most five tool uses, and no SDK retries or fallbacks.
+  Inaccessible/unreadable menus return recoverable errors, never invented items.
+  Source pages/PDFs must be accessible to the provider's tools; verify representative
+  live sources before release. The application does not fetch arbitrary user URLs
+  itself, save source content, or log queries/agent instructions. Those fields
+  remain untrusted data in the model's user input, not system instructions.
   

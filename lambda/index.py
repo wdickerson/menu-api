@@ -1,4 +1,4 @@
-"""Menu API v1.1.0, exposed as an API Gateway REST proxy."""
+"""Menu API v1.2.0, exposed as an API Gateway REST proxy."""
 
 import base64
 import binascii
@@ -26,6 +26,7 @@ MAX_IMAGES = 5
 MAX_JSON_BODY_BYTES = 1024  # JSON is retained only for {"dummy": true}.
 MAX_SEARCH_BODY_BYTES = 4096
 MAX_SEARCH_QUERY_LENGTH = 500
+MAX_ONLINE_TRANSCRIPTION_BODY_BYTES = 65_536
 
 TRANSCRIPTION_PROVIDER = "OPENAI"  # Set to "OPENAI" or "ANTHROPIC" in code only.
 
@@ -65,10 +66,10 @@ def parse_payload(event):
     return parse_multipart(decode_body(event, MAX_BODY_BYTES), boundary)
 
 
-def parse_search_payload(event):
+def parse_json_payload(event, max_bytes):
     media_type, _ = parse_content_type(event)
     if media_type != b"application/json":
-        raise ApiError(415, "unsupported_media_type", 'Send application/json with a "query" string.')
+        raise ApiError(415, "unsupported_media_type", "Send application/json.")
 
     def unique_fields(pairs):
         result = {}
@@ -79,10 +80,13 @@ def parse_search_payload(event):
         return result
 
     try:
-        payload = json.loads(decode_body(event, MAX_SEARCH_BODY_BYTES).decode("utf-8"),
-                             object_pairs_hook=unique_fields)
+        return json.loads(decode_body(event, max_bytes).decode("utf-8"), object_pairs_hook=unique_fields)
     except (ValueError, TypeError, RecursionError):
         raise ApiError(400, "invalid_json", "Body must be a valid JSON object with unique fields.") from None
+
+
+def parse_search_payload(event):
+    payload = parse_json_payload(event, MAX_SEARCH_BODY_BYTES)
     if (not isinstance(payload, dict) or set(payload) != {"query"}
             or not isinstance(payload["query"], str)):
         raise ApiError(400, "invalid_request", 'Provide only a "query" string.')
@@ -90,6 +94,20 @@ def parse_search_payload(event):
     if not 1 <= len(query) <= MAX_SEARCH_QUERY_LENGTH:
         raise ApiError(400, "invalid_query", f"Describe the menu in 1–{MAX_SEARCH_QUERY_LENGTH} characters.")
     return query
+
+
+def parse_online_transcription_payload(event):
+    payload = parse_json_payload(event, MAX_ONLINE_TRANSCRIPTION_BODY_BYTES)
+    if (not isinstance(payload, dict) or set(payload) != {"query", "menu"}
+            or not isinstance(payload["query"], str) or not isinstance(payload["menu"], dict)):
+        raise ApiError(400, "invalid_request", 'Provide a "query" string and one selected "menu" object.')
+    query = payload["query"].strip()
+    if not 1 <= len(query) <= MAX_SEARCH_QUERY_LENGTH:
+        raise ApiError(400, "invalid_query", f"Describe the menu in 1–{MAX_SEARCH_QUERY_LENGTH} characters.")
+    fields = ("venue_identifier", "menu_identifier", "source_url", "agent_instructions")
+    if any(not isinstance(payload["menu"].get(field), str) for field in fields):
+        raise ApiError(400, "invalid_request", "The selected menu must include its four string fields.")
+    return query, {field: payload["menu"][field] for field in fields}
 
 
 def decode_body(event, max_bytes):
@@ -262,6 +280,11 @@ def lambda_handler(event, context):
             headers["Allow"] = "POST,OPTIONS"
             raise ApiError(405, "method_not_allowed", "Method not allowed. Use POST.")
         path = event.get("resource") or event.get("path")
+        if path == "/menu_online_transcribe":
+            query, menu = parse_online_transcription_payload(event)
+            if os.environ.get("ENABLE_LIVE_TRANSCRIPTION", "false").lower() != "true":
+                raise ApiError(503, "transcription_disabled", "Live menu transcription is disabled. Contact the operator.")
+            return response(200, openai_provider.transcribe_online_menu(query, menu, context))
         if path == "/menu_online_search":
             query = parse_search_payload(event)
             if os.environ.get("ENABLE_LIVE_SEARCH", "false").lower() != "true":

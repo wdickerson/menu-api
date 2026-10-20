@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from urllib.parse import urlsplit
 
 import openai as openai_sdk
 from openai.types.responses import (
@@ -23,6 +24,7 @@ from .shared import (
     MENU_TRANSCRIPTION_SCHEMA,
     MENU_SEARCH_PROMPT,
     MENU_SEARCH_SCHEMA,
+    MENU_ONLINE_TRANSCRIPTION_PROMPT,
     get_api_key,
     get_request_timeout,
     run_with_deadline,
@@ -37,6 +39,8 @@ DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_REASONING_EFFORT: ReasoningEffort = "none"
 SEARCH_MODEL = "gpt-6-luna"
 SEARCH_REASONING_EFFORT: ReasoningEffort = "medium"
+ONLINE_TRANSCRIPTION_MODEL = "gpt-6-luna"
+ONLINE_TRANSCRIPTION_REASONING_EFFORT: ReasoningEffort = "none"
 TIMEOUT_SECONDS = 20.0
 
 
@@ -145,7 +149,6 @@ def search_menus(query: str, context):
     timeout = get_request_timeout(context, provider_name="OpenAI", max_seconds=TIMEOUT_SECONDS)
     try:
         response = run_search_with_deadline(_request_search(api_key, query, timeout), timeout)
-        # Temporary debug output; remove before deploying to production.
         return validate_search_results(json.loads(response.output_text), provider_name="OpenAI")
     except (openai_sdk.APITimeoutError, asyncio.TimeoutError):
         raise ApiError(504, "openai_timeout", "Menu search timed out. Please try again.") from None
@@ -173,6 +176,64 @@ async def _request_search(api_key, query, timeout):
             text={"format": {"type": "json_schema", "name": "menu_online_search",
                              "strict": True, "schema": MENU_SEARCH_SCHEMA}},
             max_output_tokens=4000, store=False,
+        )
+
+
+def transcribe_online_menu(query: str, menu: dict[str, str], context):
+    """Retrieve and transcribe the chosen menu; never fetch user URLs in Lambda."""
+    api_key = get_api_key("OPENAI_API_KEY")
+    timeout = get_request_timeout(context, provider_name="OpenAI", max_seconds=30)
+    # timeout = get_request_timeout(context, provider_name="OpenAI", max_seconds=TIMEOUT_SECONDS)
+    try:
+        response = run_search_with_deadline(_request_online_transcription(api_key, query, menu, timeout), timeout)
+        # Only the usable menu JSON matters, not optional web-search metadata.
+        return validate_menu(json.loads(response.output_text), provider_name="OpenAI")
+    except (openai_sdk.APITimeoutError, asyncio.TimeoutError):
+        raise ApiError(504, "openai_timeout", "Reading the online menu timed out. Please try again.") from None
+    except openai_sdk.APIStatusError as error:
+        raise _online_transcription_error(map_api_error(error)) from None
+    except openai_sdk.APIConnectionError:
+        raise ApiError(502, "openai_unavailable", "Could not connect to OpenAI. Try again later.") from None
+    except openai_sdk.OpenAIError:
+        raise ApiError(502, "openai_failure", "OpenAI could not read this online menu. Try again.") from None
+    except ApiError as error:
+        raise _online_transcription_error(error) from None
+    except (ValueError, TypeError, AttributeError, RecursionError):
+        raise ApiError(502, "invalid_openai_response", "OpenAI returned an invalid menu. Try again.") from None
+
+
+def _online_transcription_error(error: ApiError) -> ApiError:
+    if error.code == "no_menu_found":
+        return ApiError(422, error.code, "The selected online menu could not be found or accessed. Try another match.")
+    if error.code == "illegible_text":
+        return ApiError(422, error.code, "The selected online menu could not be read. Try another match or capture photos.")
+    if any(word in error.message.lower() for word in ("image", "photo")):
+        return ApiError(error.status, error.code, "The online menu could not be transcribed. Please try again.")
+    return error
+
+
+async def _request_online_transcription(api_key, query, menu, timeout):
+    try:
+        source_domain = urlsplit(menu["source_url"]).hostname
+    except ValueError:
+        source_domain = None
+    if not source_domain:
+        raise ApiError(400, "invalid_source_url", "The selected menu needs a source URL with a hostname. Try another match.")
+    async with openai_sdk.AsyncOpenAI(api_key=api_key, base_url="https://api.openai.com/v1",
+                                     timeout=timeout, max_retries=0) as client:
+        return await client.responses.create(
+            model='gpt-6-luna',
+            # model=ONLINE_TRANSCRIPTION_MODEL,
+            reasoning={"effort": "none"},
+            instructions=MENU_ONLINE_TRANSCRIPTION_PROMPT,
+            input=[{"role": "user", "content": [{"type": "input_text", "text": json.dumps({
+                "source_url": menu["source_url"], "agent_instructions": menu["agent_instructions"],
+            })}]}],
+            tools=[{"type": "web_search", "filters": {"allowed_domains": [source_domain]}}],
+            tool_choice="required", max_tool_calls=5,
+            text={"format": {"type": "json_schema", "name": "menu_online_transcription",
+                             "strict": True, "schema": MENU_TRANSCRIPTION_SCHEMA}},
+            max_output_tokens=8000, store=False,
         )
 
 

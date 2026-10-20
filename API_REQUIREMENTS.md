@@ -76,3 +76,21 @@ The AI model should be instructed to respond with between 1 and 8 possible menus
 Online menu search uses OpenAI only, with `gpt-6-luna` and medium reasoning effort. Its model and effort are configured separately from image transcription. Keep both OpenAI and Anthropic support for image transcription.
 
 Search response validation checks only the result list and its four string fields. Extra fields are ignored, and otherwise usable results are not rejected for blank strings, count, URL contents, or absent provider/tool/source metadata.
+
+# Menu API requirements — v1.2.0
+
+Add a new POST endpoint: "/menu_online_transcribe"
+
+This endpoint accepts exactly one list item of the possible menus
+identified by the /menu_online_search endpoint. It will also receive the origina query from the user. From this information (particularly the `agent_instructions` field), this endpoint is responsible for finding the identified menu online, and returning the same structured JSON that the "menu_image_transcribe" returns.
+
+Use an AI model to turn the API input into the structured JSON.
+Initially, we will only support OpenAI for this enpoint.
+The specific model should be configurable separately from the other two OpenAI calls.
+
+This is the second and final neccessary API endpoint which enables a client to search with a simple user defined query and end up with a structured JSON menu.
+
+Wire contract: send JSON `{"query":"original query","menu":{"venue_identifier":"...","menu_identifier":"...","source_url":"...","agent_instructions":"..."}}`. The selected result has four fields, including the source URL added in v1.1.0. Reuse `ENABLE_LIVE_TRANSCRIPTION` / CloudFormation `EnableLiveTranscription` for this endpoint; do not add a separate enablement flag.
+
+
+
