@@ -1,33 +1,27 @@
+# Menu API requirements — v1.0.0
 
-## Version 1
+## Requests and responses
 
-The API accepts between 1 and 5 images in its single POST endpoint, and makes a call
-to the OpenAI API to transcribe the menu image into the JSON format needed by menu-frontend.
+- One synchronous `POST /menus` transcribes menu photos into screen-reader-friendly text.
+- Live requests use multipart form data: 1–5 repeated `images` files (JPEG, PNG, WebP)
+	and optional `dummy` text, exactly `true` or `false` (default). Reject unknown fields,
+	duplicate flags, empty filenames, and mismatched/unsupported image signatures.
+- Limits: 4,500,000 combined image bytes, 4,600,000 multipart body bytes, six parts.
+	Accepted image bytes are forwarded without resizing; URLs and JSON image uploads are unsupported.
+- Multipart `dummy=true`, or JSON containing only `{"dummy":true}` (at most 1,024 bytes),
+	returns the bundled sample without credentials or provider calls; no images are required.
+- HTTP 200 returns `isDummy`, `restaurantName`, and `sections` with `name` and string `items`.
+	Validate nonempty live sections/items; trim text and replace a blank restaurant name with `Restaurant`.
+- Handler errors use `{"error":{"code":"...","message":"..."}}` with appropriate HTTP status
+	for invalid/oversized input, unreadable/non-menu images, refusal, configuration, provider, or timeout failures.
 
-menu-api needs to know an OpenAI API key to make the request, which can be provided by a human developer.
+## Processing and operation
 
-The usual successful response is JSON including the menu data and the restaurant name. If the restaurant name cannot be determined, then a descriptive placeholder is given, like "Burger Place", "Coffee Shop", "Indian Restaurant", etc.
-
-The images may be of a printed menu, a large typewritten menu behind a counter (like at a counter-serve restaurant), a poster-sized menu (like at a food truck), a large handwritten menu (like the draft beer list at a beer hall), etc.
-
-Failure responses may include:
-Text in image is not legible
-No menu found in image
-OpenAI API is not funded
-Other OpenAI failure
-Any other errors that make sense to include
-
-A special "dummy" flag is considered on the post input which tells menu-api to return a stored, dummy menu instead of making a call to OpenAI. This is so that the frontend can be developed without always having to call OpenAI.
-
-
-## Version 2
-
-Add a second path, which provides the same functionality but uses
-the Anthropic API and the Haiku 5.5 model.
-
-The path should be chosen by setting a variable in the codebase to either "OPENAI" or "ANTHROPIC". No need to rely on an env variable or external parameter.
-
-If it makes sense, use a different python file for the OPENAI path and the ANTHROPIC path, to make the codebase easier to understand.
-
-The anthropic api key is the "ANTHROPIC_API_KEY" field in the menu_api_secrets secret.
-
+- Code selects `OPENAI` (Responses API) or `ANTHROPIC` (Messages API); requests cannot override it.
+	Send all images in one structured-output request; no automatic retries, provider fallback, or dummy fallback.
+- Live calls require explicit enablement and the selected provider's key from the environment
+	or the JSON Secrets Manager secret selected by `MENU_API_SECRET_ID`; environment keys take precedence.
+- Provider work has a 20-second deadline, capped by remaining Lambda time minus three seconds.
+- Handler responses are non-cacheable and allow noncredentialed cross-origin requests.
+	Gateway preflight/errors use the configured origin. The public endpoint has no authentication;
+	gateway throttling is best-effort, not a spending cap. The application does not store images.

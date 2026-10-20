@@ -1,4 +1,4 @@
-"""Version 2 menu transcription, exposed as an API Gateway REST proxy."""
+"""Menu API v1.0.0, exposed as an API Gateway REST proxy."""
 
 import base64
 import binascii
