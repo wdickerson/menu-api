@@ -32,13 +32,15 @@ Run offline tests with `python -m unittest discover -s tests -v`.
 - Choose `OPENAI` or `ANTHROPIC` for image transcription via `TRANSCRIPTION_PROVIDER`
   in [lambda/index.py](lambda/index.py). Online search always uses OpenAI,
   independently of that selection. Each provider's `DEFAULT_MODEL` controls image
-  transcription. OpenAI's separate `SEARCH_MODEL` (`gpt-6-luna`) and
-  `SEARCH_REASONING_EFFORT` (`medium`) control search in
+  transcription. OpenAI's separate `SEARCH_MODEL` (`gpt-6.1-sol`) and
+  `SEARCH_REASONING_EFFORT` (`low`) control search in
   [lambda/providers/openai.py](lambda/providers/openai.py). Requests and environment
   variables cannot override these settings.
 - Online transcription has its own `ONLINE_TRANSCRIPTION_MODEL` and
-  `ONLINE_TRANSCRIPTION_REASONING_EFFORT` constants (currently Luna/`none`),
-  independent of both the image model and search model. It always uses OpenAI.
+  `ONLINE_TRANSCRIPTION_REASONING_EFFORT` constants, independent of both the image
+  model and search model. All three OpenAI calls default to `gpt-6.1-sol`, `low`
+  reasoning and the `ultrafast` service tier, with separate code-owned settings.
+  Online transcription always uses OpenAI.
 - Paid calls require `ENABLE_LIVE_TRANSCRIPTION=true` for **both photo and online
   transcription**, or
   `ENABLE_LIVE_SEARCH=true` for web search. Photos use the selected provider's
@@ -75,12 +77,12 @@ Run offline tests with `python -m unittest discover -s tests -v`.
   No loading or transcription is performed by search.
 - No matches returns HTTP 422 `no_menu_found` using the standard error envelope.
   Other failures remain errors, never fabricated matches or dummy fallbacks.
-- OpenAI uses Responses with Luna, medium reasoning, required hosted web search,
+- OpenAI uses Responses with Sol, low reasoning, the ultrafast tier, required hosted web search,
   and structured output including `source_url`. Search results
   are accepted based on their JSON fields, not provider envelope/tool metadata.
   HTTP/network errors, timeouts, and unusable JSON still return safe errors.
 - All search work shares a 20-second deadline, capped by remaining Lambda time
-  minus three seconds, with at most three search tool uses and no SDK retries.
+  minus three seconds, with at most eight search tool uses and no SDK retries.
   Queries/results are not stored or logged by the application. Provider-side
   processing/retention policies still apply.
 - `/menus` was removed. Deploy the updated CloudFormation routes/permissions and
@@ -102,18 +104,18 @@ Run offline tests with `python -m unittest discover -s tests -v`.
   not change online transcription's OpenAI provider or credentials.
 - One Responses request uses hosted web search to locate/read the selected menu
   page or PDF, and structured output with the existing menu schema. The user
-  input sent to OpenAI contains exactly `source_url` and `agent_instructions`;
-  the user's query, nested menu object, and other menu fields are not forwarded. The response
+  input sent to OpenAI contains only the selected `agent_instructions` text;
+  the user's query, nested menu object, and other menu fields (including the separate
+  `source_url`) are not forwarded. Instructions should therefore include the menu URL. The response
   is `{"isDummy":false,"restaurantName":"...","sections":[{"name":"...","items":["..."]}]}`.
   Shared menu validation normalizes the output for the existing frontend/library.
   Optional source/tool metadata is not used as a success gate.
-- Online transcription's `web_search` tool uses `filters.allowed_domains` with
-  the hostname parsed from `source_url`, without its scheme, port, path, or query.
-  OpenAI's domain filtering also includes subdomains. A missing/unparseable
-  hostname returns HTTP 400 `invalid_source_url`, never unrestricted search.
-  Initial menu discovery remains unrestricted.
-- All provider work has one 20-second deadline (capped by remaining Lambda time
-  minus three seconds), at most five tool uses, and no SDK retries or fallbacks.
+- Online transcription's `web_search` tool is unrestricted, with `tool_choice="auto"`:
+  the model may answer without searching. The separate `source_url` still needs
+  a parseable hostname; otherwise the API returns HTTP 400 `invalid_source_url`.
+  Initial menu discovery also remains unrestricted, but requires search.
+- Online provider work has one 30-second deadline (capped by remaining Lambda time
+  minus three seconds), at most three tool uses, and no SDK retries or fallbacks.
   Inaccessible/unreadable menus return recoverable errors, never invented items.
   Source pages/PDFs must be accessible to the provider's tools; verify representative
   live sources before release. The application does not fetch arbitrary user URLs

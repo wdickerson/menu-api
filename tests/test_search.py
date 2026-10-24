@@ -483,8 +483,8 @@ class OpenAISearchTests(_SearchCase):
     def test_search_model_and_effort_are_code_owned_and_separate_from_image_defaults(self):
         original_model = openai_provider.SEARCH_MODEL
         original_effort = openai_provider.SEARCH_REASONING_EFFORT
-        self.assertEqual(original_model, "gpt-6-luna")
-        self.assertEqual(original_effort, "medium")
+        self.assertEqual(original_model, "gpt-6.1-sol")
+        self.assertEqual(original_effort, "low")
         with patch.dict(os.environ, {
             "SEARCH_MODEL": "ignored-generic-model", "OPENAI_SEARCH_MODEL": "ignored-openai-model",
             "SEARCH_REASONING_EFFORT": "high", "OPENAI_SEARCH_REASONING_EFFORT": "high",
@@ -568,15 +568,16 @@ class OpenAISearchTests(_SearchCase):
         self.assertEqual(str(request.url), "https://api.openai.com/v1/responses")
         self.assertEqual(request.headers["authorization"], "Bearer openai-offline-key")
         sent = json.loads(request.content)
-        self.assertEqual(openai_provider.SEARCH_MODEL, "gpt-6-luna")
-        self.assertEqual(openai_provider.SEARCH_REASONING_EFFORT, "medium")
-        self.assertEqual(sent["model"], "gpt-6-luna")
-        self.assertEqual(sent["reasoning"], {"effort": "medium"})
+        self.assertEqual(openai_provider.SEARCH_MODEL, "gpt-6.1-sol")
+        self.assertEqual(openai_provider.SEARCH_REASONING_EFFORT, "low")
+        self.assertEqual(sent["model"], "gpt-6.1-sol")
+        self.assertEqual(sent["reasoning"], {"effort": "low"})
+        self.assertEqual(sent["service_tier"], "ultrafast")
         self.assertEqual(sent["instructions"], shared.MENU_SEARCH_PROMPT)
         self.assertEqual(sent["input"], [{"role": "user", "content": [{"type": "input_text", "text": QUERY}]}])
         self.assertEqual(sent["tools"], [{"type": "web_search"}])
         self.assertEqual(sent["tool_choice"], "required")
-        self.assertEqual(sent["max_tool_calls"], 3)
+        self.assertEqual(sent["max_tool_calls"], 8)
         self.assertNotIn("include", sent)
         self.assertEqual(sent["text"]["format"], {
             "type": "json_schema", "name": "menu_online_search", "strict": True,
@@ -584,8 +585,7 @@ class OpenAISearchTests(_SearchCase):
         })
         self.assertEqual(sent["max_output_tokens"], 4000)
         self.assertIs(sent["store"], False)
-        for transcription_option in ("service_tier", "messages"):
-            self.assertNotIn(transcription_option, sent)
+        self.assertNotIn("messages", sent)
         self.assertEqual(self.openai.call_args.kwargs["max_retries"], 0)
         self.assertEqual(self.openai.call_args.kwargs["timeout"], 20)
         self.assert_selected_only()

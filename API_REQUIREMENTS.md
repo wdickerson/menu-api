@@ -73,7 +73,7 @@ The `agent_instructions` field will not be displayed to users. Rather, once the 
 
 The AI model should be instructed to respond with between 1 and 8 possible menus, depending on how confident it is that it found the user's desired menu.
 
-Online menu search uses OpenAI only, with `gpt-6-luna` and medium reasoning effort. Its model and effort are configured separately from image transcription. Keep both OpenAI and Anthropic support for image transcription.
+Online menu search uses OpenAI only, with `gpt-6.1-sol`, low reasoning effort, the ultrafast service tier, required web search, and at most eight tool calls. Its settings are configured separately from image transcription. Keep both OpenAI and Anthropic support for image transcription.
 
 Search response validation checks only the result list and its four string fields. Extra fields are ignored, and otherwise usable results are not rejected for blank strings, count, URL contents, or absent provider/tool/source metadata.
 
@@ -87,10 +87,30 @@ identified by the /menu_online_search endpoint. It will also receive the origina
 Use an AI model to turn the API input into the structured JSON.
 Initially, we will only support OpenAI for this enpoint.
 The specific model should be configurable separately from the other two OpenAI calls.
+Defaults are `gpt-6.1-sol`, low reasoning effort, and the ultrafast service tier.
+Forward only `agent_instructions` as user text; it should include the menu URL.
+Web search is unrestricted and optional (`tool_choice="auto"`), with at most three
+tool calls. Keep source-URL hostname validation. The online-transcription deadline
+is 30 seconds, capped by remaining Lambda time minus three seconds; image and
+search deadlines remain 20 seconds.
 
 This is the second and final neccessary API endpoint which enables a client to search with a simple user defined query and end up with a structured JSON menu.
 
 Wire contract: send JSON `{"query":"original query","menu":{"venue_identifier":"...","menu_identifier":"...","source_url":"...","agent_instructions":"..."}}`. The selected result has four fields, including the source URL added in v1.1.0. Reuse `ENABLE_LIVE_TRANSCRIPTION` / CloudFormation `EnableLiveTranscription` for this endpoint; do not add a separate enablement flag.
 
+# Menu API requirements - v1.3.0 (PENDING)
 
+**Direct online file transcription**
+Update /menu_online_transcribe to choose its OpenAI input based on source_url:
+
+PDF URLs: use input_file with file_url, without web search.
+JPEG, PNG, and WebP URLs: use input_image with image_url, without web search.
+Webpage URLs: retain the current web-search path.
+Identify file extensions case-insensitively from the URL path, ignoring query strings and fragments. Forward the complete URL unchanged. URLs without a recognized extension use the webpage path.
+
+Include agent_instructions as user text. Keep the existing online-transcription settings, deadline, schema, validation, and API contracts.
+
+Do not download or upload files server-side, or add fallback attempts. If OpenAI cannot retrieve or read the file, return a safe, recoverable error.
+
+Add offline tests for routing, OpenAI request payloads, and retrieval failures.
 

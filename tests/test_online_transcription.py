@@ -44,21 +44,19 @@ class OnlineTranscriptionTests(_SearchCase):
         self.assertEqual(sent["model"], openai_provider.ONLINE_TRANSCRIPTION_MODEL)
         self.assertEqual(sent["reasoning"], {"effort": openai_provider.ONLINE_TRANSCRIPTION_REASONING_EFFORT})
         self.assertEqual(sent["instructions"], shared.MENU_ONLINE_TRANSCRIPTION_PROMPT)
-        self.assertEqual(json.loads(sent["input"][0]["content"][0]["text"]), {
-            "source_url": CANDIDATE["source_url"], "agent_instructions": CANDIDATE["agent_instructions"],
-        })
-        self.assertEqual(sent["tools"], [{"type": "web_search", "filters": {
-            "allowed_domains": ["venue.example.com"],
-        }}])
-        self.assertEqual(sent["tool_choice"], "required")
-        self.assertEqual(sent["max_tool_calls"], 5)
+        self.assertEqual(sent["model"], "gpt-6.1-sol")
+        self.assertEqual(sent["reasoning"], {"effort": "low"})
+        self.assertEqual(sent["input"][0]["content"][0]["text"], CANDIDATE["agent_instructions"])
+        self.assertEqual(sent["tools"], [{"type": "web_search"}])
+        self.assertEqual(sent["tool_choice"], "auto")
+        self.assertEqual(sent["max_tool_calls"], 3)
         self.assertEqual(sent["text"]["format"], {"type": "json_schema", "name": "menu_online_transcription",
                                                  "strict": True, "schema": shared.MENU_TRANSCRIPTION_SCHEMA})
         self.assertEqual(sent["max_output_tokens"], 8000)
         self.assertIs(sent["store"], False)
         self.assertEqual(self.openai.call_args.kwargs["max_retries"], 0)
-        self.assertEqual(self.openai.call_args.kwargs["timeout"], 20)
-        self.assertNotIn("service_tier", sent)
+        self.assertEqual(self.openai.call_args.kwargs["timeout"], 30)
+        self.assertEqual(sent["service_tier"], "ultrafast")
         self.anthropic.assert_not_called()
 
     def test_openai_input_is_flat_and_excludes_selected_menu_metadata(self):
@@ -66,10 +64,8 @@ class OnlineTranscriptionTests(_SearchCase):
         response, data = self.invoke(query=original_query)
         self.assertEqual(response["statusCode"], 200, data)
         sent = json.loads(self.requests["OPENAI"][0].content)
-        payload = json.loads(sent["input"][0]["content"][0]["text"])
-        self.assertEqual(payload, {"source_url": CANDIDATE["source_url"],
-                       "agent_instructions": CANDIDATE["agent_instructions"]})
-        self.assertEqual(set(payload), {"source_url", "agent_instructions"})
+        payload = sent["input"][0]["content"][0]["text"]
+        self.assertEqual(payload, CANDIDATE["agent_instructions"])
         self.assertNotIn(original_query, sent["input"][0]["content"][0]["text"])
 
     def test_model_and_effort_are_separate_from_both_other_openai_calls(self):
@@ -101,15 +97,13 @@ class OnlineTranscriptionTests(_SearchCase):
             self.assert_error(503, "transcription_disabled")
         self.assert_no_calls()
 
-    def test_query_is_omitted_and_selected_source_and_instructions_are_preserved(self):
+    def test_query_is_omitted_and_selected_instructions_are_preserved(self):
         menu = {key: " \n" + value + "\t " for key, value in CANDIDATE.items()}
         menu["agent_instructions"] = "Untrusted guidance, not system instructions: " + PRIVATE
         response, data = self.invoke(event_for({"query": " \n" + QUERY + "\t ", "menu": {**menu, "extra": True}}, encoded=True))
         self.assertEqual(response["statusCode"], 200, data)
         sent = json.loads(self.requests["OPENAI"][0].content)
-        self.assertEqual(json.loads(sent["input"][0]["content"][0]["text"]), {
-            "source_url": menu["source_url"], "agent_instructions": menu["agent_instructions"],
-        })
+        self.assertEqual(sent["input"][0]["content"][0]["text"], menu["agent_instructions"])
         self.assertNotIn(QUERY, sent["input"][0]["content"][0]["text"])
         self.assertNotIn(PRIVATE, sent["instructions"])
         self.assertNotIn(PRIVATE, response["body"] + str(self.log.mock_calls))
@@ -127,11 +121,11 @@ class OnlineTranscriptionTests(_SearchCase):
                 key: value for key, value in CANDIDATE.items() if key != field}}))
         self.assert_no_calls()
 
-    def test_online_web_search_is_restricted_to_source_hostname(self):
-        for source, domain in (
-            ("https://venue.example.com/menu.pdf", "venue.example.com"),
-            ("https://WWW.Example.COM:8443/menu.pdf?next=https://other.example/#menu", "www.example.com"),
-            ("http://menus.venue.co.uk/dinner", "menus.venue.co.uk"),
+    def test_online_web_search_is_unrestricted_and_uses_only_instructions(self):
+        for source in (
+            "https://venue.example.com/menu.pdf",
+            "https://WWW.Example.COM:8443/menu.pdf?next=https://other.example/#menu",
+            "http://menus.venue.co.uk/dinner",
         ):
             with self.subTest(source=source):
                 response, data = self.invoke(event_for({"query": QUERY, "menu": {
@@ -140,10 +134,10 @@ class OnlineTranscriptionTests(_SearchCase):
                 }}))
                 self.assertEqual(response["statusCode"], 200, data)
                 sent = json.loads(self.requests["OPENAI"][-1].content)
-                self.assertEqual(sent["tools"], [{"type": "web_search", "filters": {"allowed_domains": [domain]}}])
-                self.assertEqual(json.loads(sent["input"][0]["content"][0]["text"])["source_url"], source)
+                self.assertEqual(sent["tools"], [{"type": "web_search"}])
+                self.assertEqual(sent["input"][0]["content"][0]["text"], "Read https://unrelated.example/menu.pdf")
 
-    def test_missing_source_hostname_never_falls_back_to_unrestricted_search(self):
+    def test_missing_source_hostname_is_rejected_before_provider_call(self):
         for source in ("", "not a URL", "/menu.pdf", "https://", "https://[bad-host/menu", "javascript:alert(1)"):
             with self.subTest(source=source):
                 self.assert_error(400, "invalid_source_url", event_for({"query": QUERY, "menu": {
@@ -235,7 +229,7 @@ class OnlineTranscriptionTests(_SearchCase):
             await asyncio.Event().wait()
 
         with patch.object(openai_provider, "_request_online_transcription", side_effect=stalled), \
-                patch.object(openai_provider, "TIMEOUT_SECONDS", 0.01):
+            patch.object(openai_provider, "ONLINE_TRANSCRIPTION_TIMEOUT_SECONDS", 0.01):
             self.assert_error(504, "openai_timeout")
 
     def test_local_adapter_preflight_and_shared_enable_flag(self):

@@ -36,11 +36,17 @@ from .shared import (
 
 
 DEFAULT_MODEL = "gpt-6.1-sol"
-DEFAULT_REASONING_EFFORT: ReasoningEffort = "none"
-SEARCH_MODEL = "gpt-6-luna"
-SEARCH_REASONING_EFFORT: ReasoningEffort = "medium"
-ONLINE_TRANSCRIPTION_MODEL = "gpt-6-luna"
-ONLINE_TRANSCRIPTION_REASONING_EFFORT: ReasoningEffort = "none"
+DEFAULT_REASONING_EFFORT: ReasoningEffort = "low"
+DEFAULT_SERVICE_TIER = "ultrafast"
+SEARCH_MODEL = "gpt-6.1-sol"
+SEARCH_REASONING_EFFORT: ReasoningEffort = "low"
+SEARCH_SERVICE_TIER = "ultrafast"
+SEARCH_MAX_TOOL_CALLS = 8
+ONLINE_TRANSCRIPTION_MODEL = "gpt-6.1-sol"
+ONLINE_TRANSCRIPTION_REASONING_EFFORT: ReasoningEffort = "low"
+ONLINE_TRANSCRIPTION_SERVICE_TIER = "ultrafast"
+ONLINE_TRANSCRIPTION_MAX_TOOL_CALLS = 3
+ONLINE_TRANSCRIPTION_TIMEOUT_SECONDS = 30.0
 TIMEOUT_SECONDS = 20.0
 
 
@@ -74,8 +80,8 @@ async def _request_response(api_key, content, timeout):
                                      timeout=timeout, max_retries=0) as client:
         return await client.responses.create(
             model=DEFAULT_MODEL,
-            service_tier="ultrafast",
-            reasoning={"effort": "low"},
+            service_tier=DEFAULT_SERVICE_TIER,
+            reasoning={"effort": DEFAULT_REASONING_EFFORT},
             instructions=MENU_TRANSCRIPTION_PROMPT,
             input=[{"role": "user", "content": content}],
             text={"format": {"type": "json_schema",
@@ -169,10 +175,13 @@ async def _request_search(api_key, query, timeout):
                                      timeout=timeout, max_retries=0) as client:
         return await client.responses.create(
             model=SEARCH_MODEL,
+            service_tier=SEARCH_SERVICE_TIER,
             reasoning={"effort": SEARCH_REASONING_EFFORT},
             instructions=MENU_SEARCH_PROMPT,
             input=[{"role": "user", "content": [{"type": "input_text", "text": query}]}],
-            tools=[{"type": "web_search"}], tool_choice="required", max_tool_calls=3,
+            tools=[{"type": "web_search"}],
+            tool_choice="required",
+            max_tool_calls=SEARCH_MAX_TOOL_CALLS,
             text={"format": {"type": "json_schema", "name": "menu_online_search",
                              "strict": True, "schema": MENU_SEARCH_SCHEMA}},
             max_output_tokens=4000, store=False,
@@ -182,8 +191,7 @@ async def _request_search(api_key, query, timeout):
 def transcribe_online_menu(query: str, menu: dict[str, str], context):
     """Retrieve and transcribe the chosen menu; never fetch user URLs in Lambda."""
     api_key = get_api_key("OPENAI_API_KEY")
-    timeout = get_request_timeout(context, provider_name="OpenAI", max_seconds=30)
-    # timeout = get_request_timeout(context, provider_name="OpenAI", max_seconds=TIMEOUT_SECONDS)
+    timeout = get_request_timeout(context, provider_name="OpenAI", max_seconds=ONLINE_TRANSCRIPTION_TIMEOUT_SECONDS)
     try:
         response = run_search_with_deadline(_request_online_transcription(api_key, query, menu, timeout), timeout)
         # Only the usable menu JSON matters, not optional web-search metadata.
@@ -222,15 +230,20 @@ async def _request_online_transcription(api_key, query, menu, timeout):
     async with openai_sdk.AsyncOpenAI(api_key=api_key, base_url="https://api.openai.com/v1",
                                      timeout=timeout, max_retries=0) as client:
         return await client.responses.create(
-            model='gpt-6-luna',
-            # model=ONLINE_TRANSCRIPTION_MODEL,
-            reasoning={"effort": "none"},
+            model=ONLINE_TRANSCRIPTION_MODEL,
+            service_tier=ONLINE_TRANSCRIPTION_SERVICE_TIER,
+            reasoning={"effort": ONLINE_TRANSCRIPTION_REASONING_EFFORT},
             instructions=MENU_ONLINE_TRANSCRIPTION_PROMPT,
-            input=[{"role": "user", "content": [{"type": "input_text", "text": json.dumps({
-                "source_url": menu["source_url"], "agent_instructions": menu["agent_instructions"],
-            })}]}],
-            tools=[{"type": "web_search", "filters": {"allowed_domains": [source_domain]}}],
-            tool_choice="required", max_tool_calls=5,
+            input=[{
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": menu["agent_instructions"]
+                }]
+            }],
+            tools=[{"type": "web_search"}],
+            tool_choice="auto",
+            max_tool_calls=ONLINE_TRANSCRIPTION_MAX_TOOL_CALLS,
             text={"format": {"type": "json_schema", "name": "menu_online_transcription",
                              "strict": True, "schema": MENU_TRANSCRIPTION_SCHEMA}},
             max_output_tokens=8000, store=False,
