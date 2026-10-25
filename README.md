@@ -115,6 +115,12 @@ Run offline tests with `python -m unittest discover -s tests -v`.
   input is `agent_instructions`, which should include the menu URL. The response
   is `{"isDummy":false,"restaurantName":"...","sections":[{"name":"...","items":["..."]}]}`.
   Shared menu validation normalizes the output for the existing frontend/library.
+  All transcription paths preserve empty sections (`items: []`) and section order,
+  including menus containing only empty sections. Blank section names are allowed;
+  text is trimmed, blank item strings are omitted, and extra provider fields are
+  ignored rather than forwarded. Missing fields, incorrect types, unknown statuses,
+  and successful responses with no sections are still rejected. A blank restaurant
+  name becomes `Restaurant`; explicit non-menu/unreadable statuses remain errors.
   Optional source/tool metadata is not used as a success gate.
 - For webpage URLs, online transcription's `web_search` tool is unrestricted,
   with `tool_choice="auto"`: the model may answer without searching.

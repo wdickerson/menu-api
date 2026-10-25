@@ -235,6 +235,15 @@ class OnlineTranscriptionTests(_SearchCase):
         response, data = self.invoke()
         self.assertEqual(response["statusCode"], 200, data)
 
+    def test_empty_sections_are_returned_in_order(self):
+        empty = {"name": "Monday-Friday 3-6 & Thursday-Saturday 10-Midnight", "items": []}
+        for sections in ([empty], [empty, *MENU["sections"], empty]):
+            with self.subTest(sections=sections):
+                self.openai_body = image_tests.MenuHandlerTests.response({**MENU, "sections": sections})
+                response, menu = self.invoke()
+                self.assertEqual(response["statusCode"], 200, menu)
+                self.assertEqual(menu["sections"], sections)
+
     def test_unusable_menu_and_no_menu_results_are_safe_errors(self):
         for menu in ({}, {"possible_menus": [CANDIDATE]}, {**MENU, "sections": []}, {**MENU, "sections": [{}]}):
             self.openai_body = image_tests.MenuHandlerTests.response(menu)

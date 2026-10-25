@@ -268,10 +268,19 @@ class AnthropicHandlerTests(unittest.TestCase):
         self.assertEqual(menu["restaurantName"], "Restaurant")
 
     def test_invalid_menu_outputs(self):
-        for data in (None, [], {}, {**MENU, "sections": []}, {**MENU, "extra": True},
+        for data in (None, [], {}, {**MENU, "sections": []},
                      {**MENU, "sections": [{"name": "Drinks", "items": [1]}]}):
             self.http_body = self.completion(data)
             self.assert_error(502, "invalid_anthropic_response")
+
+    def test_empty_sections_are_returned_in_order(self):
+        empty = {"name": "Monday-Friday 3-6", "items": []}
+        for sections in ([empty], [empty, *MENU["sections"], empty]):
+            with self.subTest(sections=sections):
+                self.http_body = self.completion({**MENU, "sections": sections})
+                response, menu = self.invoke()
+                self.assertEqual(response["statusCode"], 200, menu)
+                self.assertEqual(menu["sections"], sections)
 
     def test_invalid_envelopes_and_content(self):
         for body in (b"not-json", [], {}, {**self.completion(MENU), "content": None},

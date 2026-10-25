@@ -11,7 +11,10 @@
 - Multipart `dummy=true`, or JSON containing only `{"dummy":true}` (at most 1,024 bytes),
 	returns the bundled sample without credentials or provider calls; no images are required.
 - HTTP 200 returns `isDummy`, `restaurantName`, and `sections` with `name` and string `items`.
-	Validate nonempty live sections/items; trim text and replace a blank restaurant name with `Restaurant`.
+  Require at least one live section, but allow empty item lists and blank section names.
+  Preserve section order, trim text, omit blank item strings, ignore extra provider fields,
+  and replace a blank restaurant name with `Restaurant`. Required fields and their types
+  are still validated; explicit `no_menu` and `illegible_text` statuses remain errors.
 - Handler errors use `{"error":{"code":"...","message":"..."}}` with appropriate HTTP status
 	for invalid/oversized input, unreadable/non-menu images, refusal, configuration, provider, or timeout failures.
 

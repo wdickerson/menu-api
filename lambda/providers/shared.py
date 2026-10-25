@@ -25,6 +25,7 @@ Omit standard footers (ie, about fees, allergies, warnings, etc).
 Include item descriptions if they are legible.
 If item descriptions include symbols, include their meaning.
 If you can't find a restaurant name, use a descriptive placeholder.
+Include the menu variant in the restaurant name if it is specified and it applies to the whole menu.
 """
 # MENU_TRANSCRIPTION_PROMPT = """
 # Find the menu in these images and transcribe it quickly.
@@ -122,6 +123,7 @@ Do not add additional sections to the transcription.
 Do not add citations.
 Do not invent sections or menu items.
 If you can't find a restaurant name, use a descriptive placeholder.
+Include the menu variant in the restaurant name if it is specified and it applies to the whole menu.
 """
 
 # MENU_ONLINE_TRANSCRIPTION_PROMPT = """
@@ -240,10 +242,10 @@ def run_search_with_deadline(request: Awaitable[ResponseT], timeout: float) -> R
 
 
 def validate_menu(data, *, provider_name: str):
-    """Validate structured output and normalize it to the frontend menu contract."""
+    """Require usable field types, retaining empty sections and ignoring extra metadata."""
     invalid = ApiError(502, f"invalid_{provider_name.lower()}_response",
                        f"{provider_name} returned an invalid menu. Try again.")
-    if not isinstance(data, dict) or set(data) != {"status", "restaurantName", "sections"}:
+    if not isinstance(data, dict) or not {"status", "restaurantName", "sections"}.issubset(data):
         raise invalid
     if not isinstance(data["restaurantName"], str) or not isinstance(data["sections"], list):
         raise invalid
@@ -255,12 +257,14 @@ def validate_menu(data, *, provider_name: str):
         raise invalid
     sections = []
     for section in data["sections"]:
-        if (not isinstance(section, dict) or set(section) != {"name", "items"}
-                or not isinstance(section["name"], str) or not section["name"].strip()
-                or not isinstance(section["items"], list) or not section["items"]
-                or any(not isinstance(item, str) or not item.strip() for item in section["items"])):
+        if (not isinstance(section, dict) or not {"name", "items"}.issubset(section)
+                or not isinstance(section["name"], str)
+                or not isinstance(section["items"], list)
+                or any(not isinstance(item, str) for item in section["items"])):
             raise invalid
-        sections.append({"name": section["name"].strip(), "items": [item.strip() for item in section["items"]]})
+        # Empty headings/sections must not discard the rest of a readable menu.
+        items = [item.strip() for item in section["items"] if item.strip()]
+        sections.append({"name": section["name"].strip(), "items": items})
     return {
         "isDummy": False,
         "restaurantName": data["restaurantName"].strip() or "Restaurant",

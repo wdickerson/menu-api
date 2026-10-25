@@ -416,14 +416,22 @@ class MenuHandlerTests(unittest.TestCase):
 
     def test_invalid_menu_output(self):
         cases = [None, [], {}, {**MENU, "status": "unknown"}, {**MENU, "restaurantName": 4},
-                 {**MENU, "sections": []}, {**MENU, "sections": "wrong"}, {**MENU, "extra": True}]
-        for section in (None, {}, {"name": "", "items": ["Coffee"]}, {"name": "Drinks", "items": []},
-                        {"name": "Drinks", "items": [""]}, {"name": "Drinks", "items": [1]},
+                 {**MENU, "sections": []}, {**MENU, "sections": "wrong"}]
+        for section in (None, {}, {"name": "Drinks", "items": [1]},
                         {"name": "Drinks", "items": [{"name": "Coffee"}]}):
             cases.append({**MENU, "sections": [section]})
         for data in cases:
             self.http_body = self.response(data)
             self.assert_error(502, "invalid_openai_response")
+
+    def test_empty_sections_are_returned_in_order(self):
+        empty = {"name": "Monday-Friday 3-6 & Thursday-Saturday 10-Midnight", "items": []}
+        for sections in ([empty], [empty, *MENU["sections"], empty]):
+            with self.subTest(sections=sections):
+                self.http_body = self.response({**MENU, "sections": sections})
+                response, menu = self.invoke()
+                self.assertEqual(response["statusCode"], 200, menu)
+                self.assertEqual(menu["sections"], sections)
 
     def test_refusal_truncation_and_unexpected_status(self):
         for response_status, reason, refusal, status, code in (
