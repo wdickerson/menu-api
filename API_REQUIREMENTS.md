@@ -98,7 +98,7 @@ This is the second and final neccessary API endpoint which enables a client to s
 
 Wire contract: send JSON `{"query":"original query","menu":{"venue_identifier":"...","menu_identifier":"...","source_url":"...","agent_instructions":"..."}}`. The selected result has four fields, including the source URL added in v1.1.0. Reuse `ENABLE_LIVE_TRANSCRIPTION` / CloudFormation `EnableLiveTranscription` for this endpoint; do not add a separate enablement flag.
 
-# Menu API requirements - v1.3.0 (PENDING)
+# Menu API requirements - v1.3.0
 
 **Direct online file transcription**
 Update /menu_online_transcribe to choose its OpenAI input based on source_url:

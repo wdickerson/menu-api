@@ -1,4 +1,4 @@
-"""OpenAI image transcription and online menu search with code-owned settings."""
+"""OpenAI menu transcription and online search with code-owned settings."""
 
 import asyncio
 import json
@@ -222,11 +222,19 @@ def _online_transcription_error(error: ApiError) -> ApiError:
 
 async def _request_online_transcription(api_key, query, menu, timeout):
     try:
-        source_domain = urlsplit(menu["source_url"]).hostname
+        source = urlsplit(menu["source_url"])
+        if not source.hostname:
+            raise ValueError("Missing hostname")
     except ValueError:
-        source_domain = None
-    if not source_domain:
-        raise ApiError(400, "invalid_source_url", "The selected menu needs a source URL with a hostname. Try another match.")
+        raise ApiError(400, "invalid_source_url", "The selected menu needs a source URL with a hostname. Try another match.") from None
+    content: list[ResponseInputContentParam] = [{"type": "input_text", "text": menu["agent_instructions"]}]
+    # Inspect only the path; signed query strings and fragments must remain intact.
+    source_path = source.path.lower()
+    if source_path.endswith(".pdf"):
+        content.append({"type": "input_file", "file_url": menu["source_url"]})
+    elif source_path.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        content.append({"type": "input_image", "image_url": menu["source_url"], "detail": "high"})
+    use_web_search = len(content) == 1
     async with openai_sdk.AsyncOpenAI(api_key=api_key, base_url="https://api.openai.com/v1",
                                      timeout=timeout, max_retries=0) as client:
         return await client.responses.create(
@@ -234,16 +242,10 @@ async def _request_online_transcription(api_key, query, menu, timeout):
             service_tier=ONLINE_TRANSCRIPTION_SERVICE_TIER,
             reasoning={"effort": ONLINE_TRANSCRIPTION_REASONING_EFFORT},
             instructions=MENU_ONLINE_TRANSCRIPTION_PROMPT,
-            input=[{
-                "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": menu["agent_instructions"]
-                }]
-            }],
-            tools=[{"type": "web_search"}],
-            tool_choice="auto",
-            max_tool_calls=ONLINE_TRANSCRIPTION_MAX_TOOL_CALLS,
+            input=[{"role": "user", "content": content}],
+            tools=[{"type": "web_search"}] if use_web_search else openai_sdk.omit,
+            tool_choice="auto" if use_web_search else openai_sdk.omit,
+            max_tool_calls=ONLINE_TRANSCRIPTION_MAX_TOOL_CALLS if use_web_search else openai_sdk.omit,
             text={"format": {"type": "json_schema", "name": "menu_online_transcription",
                              "strict": True, "schema": MENU_TRANSCRIPTION_SCHEMA}},
             max_output_tokens=8000, store=False,

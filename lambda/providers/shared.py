@@ -60,16 +60,20 @@ MENU_TRANSCRIPTION_SCHEMA = {
 
 MENU_SEARCH_PROMPT = """
 Search the internet for the restaurant menu described by the user.
+Do not use memory, indexed files, or caches. Only use the current web search results.
 
 Use only official restaurant websites and their linked menu pages or PDFs.
 Do not include menus from online ordering platforms (like DoorDash, UberEats, or Toast) or other third-party sites.
+
+Set source_url to the absolute URL of the specific menu page, image, or PDF.
+If the webpage does not contain the actual menu data, inspect the page's HTML, 
+including links, embedded elements, iframes, and document viewers, to identify a menu file.
+
 Identify the venue including its location and distinguish each specific menu at that
 location (dinner, breakfast, drinks, etc).
 Include all menu variants unless the user specifies a specific variant.
 If a venue has multiple locations which share the same menu, group them together.
 Keep venue identifiers and menu identifiers short.
-
-Set source_url to the absolute URL of the specific menu page, image, or PDF.
 
 Set agent_instructions to a very concise string that will instruct a future transcription agent to transcribe this menu.
 agent_instructions must always include source_url.
@@ -105,11 +109,18 @@ MENU_SEARCH_SCHEMA = {
 MENU_ONLINE_TRANSCRIPTION_PROMPT = """
 Quickly transcribe the menu that the user describes to you.
 If they direct you to a PDF or image file, load it directly and read it.
-If they direct you to a webpage, examine the web page.
+If they direct you to a webpage, examine the web page. The menu may be displayed
+directly in the HTML markup, or you may need to navigate to one or more linked pdfs or images.
+Do not use memory or indexed files. You must download the currently hosted file.
+Be sure to transcribe every page of a pdf.
 Prefer transcriptions that are easily read aloud by screen readers.
+Keep the original section headings of the menu; do not convert them to generic terms.
 Omit standard footers (ie, about fees, allergies, warnings, etc).
 Include item descriptions if they are legible.
 If item descriptions include symbols, include their meaning.
+Do not add additional sections to the transcription.
+Do not add citations.
+Do not invent sections or menu items.
 If you can't find a restaurant name, use a descriptive placeholder.
 """
 

@@ -1,4 +1,4 @@
-# Menu API v1.2.0
+# Menu API v1.3.0
 
 Python Lambda behind API Gateway. `POST /menu_image_transcribe` transcribes menu
 photos through OpenAI or Anthropic. `POST /menu_online_search` finds possible
@@ -88,7 +88,7 @@ Run offline tests with `python -m unittest discover -s tests -v`.
 - `/menus` was removed. Deploy the updated CloudFormation routes/permissions and
   Lambda code together, then rebuild/deploy the frontend; old clients must upgrade.
 
-## Online transcription contract — v1.2.0
+## Online transcription contract — v1.3.0
 
 - Send `POST /menu_online_transcribe` with JSON
   `{"query":"original search query","menu":{"venue_identifier":"Cafe Columbia City","menu_identifier":"Dinner","source_url":"https://example.com/menu.pdf","agent_instructions":"Read the selected dinner menu and preserve its sections."}}`.
@@ -102,23 +102,32 @@ Run offline tests with `python -m unittest discover -s tests -v`.
   `EnableLiveTranscription` flag as image transcription. `ENABLE_LIVE_SEARCH`
   does not enable or disable this endpoint. Selecting Anthropic for photos does
   not change online transcription's OpenAI provider or credentials.
-- One Responses request uses hosted web search to locate/read the selected menu
-  page or PDF, and structured output with the existing menu schema. The user
-  input sent to OpenAI contains only the selected `agent_instructions` text;
-  the user's query, nested menu object, and other menu fields (including the separate
-  `source_url`) are not forwarded. Instructions should therefore include the menu URL. The response
+- One Responses request chooses its input from the selected `source_url`:
+  PDF paths use `input_file` with `file_url`; JPEG (`.jpg`/`.jpeg`), PNG, and WebP
+  paths use `input_image` with `image_url`. File requests have no web-search tools.
+  Extensions are matched case-insensitively against the URL path alone, ignoring
+  query strings and fragments. The complete URL is forwarded unchanged, including
+  signed query parameters and fragments. All other URLs, including those without
+  a recognized extension, retain the hosted web-search path.
+- All paths include the selected `agent_instructions` as user text and use the
+  existing structured menu schema. The user's query, nested menu object, venue
+  identifier, and menu identifier are not forwarded. For webpages the only user
+  input is `agent_instructions`, which should include the menu URL. The response
   is `{"isDummy":false,"restaurantName":"...","sections":[{"name":"...","items":["..."]}]}`.
   Shared menu validation normalizes the output for the existing frontend/library.
   Optional source/tool metadata is not used as a success gate.
-- Online transcription's `web_search` tool is unrestricted, with `tool_choice="auto"`:
-  the model may answer without searching. The separate `source_url` still needs
+- For webpage URLs, online transcription's `web_search` tool is unrestricted,
+  with `tool_choice="auto"`: the model may answer without searching.
+  All source URLs still need
   a parseable hostname; otherwise the API returns HTTP 400 `invalid_source_url`.
   Initial menu discovery also remains unrestricted, but requires search.
 - Online provider work has one 30-second deadline (capped by remaining Lambda time
-  minus three seconds), at most three tool uses, and no SDK retries or fallbacks.
+  minus three seconds), at most three webpage tool uses, and no SDK retries or fallbacks.
   Inaccessible/unreadable menus return recoverable errors, never invented items.
-  Source pages/PDFs must be accessible to the provider's tools; verify representative
-  live sources before release. The application does not fetch arbitrary user URLs
-  itself, save source content, or log queries/agent instructions. Those fields
+  Source pages and files must be accessible to OpenAI; retrieval/read failures use
+  the existing safe error envelope without exposing upstream details or signed URLs.
+  No failed file request is retried through web search. Verify representative
+  live sources before release. The application does not download or upload source
+  files itself, save source content, or log queries/agent instructions. Those fields
   remain untrusted data in the model's user input, not system instructions.
   

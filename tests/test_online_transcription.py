@@ -46,10 +46,12 @@ class OnlineTranscriptionTests(_SearchCase):
         self.assertEqual(sent["instructions"], shared.MENU_ONLINE_TRANSCRIPTION_PROMPT)
         self.assertEqual(sent["model"], "gpt-6.1-sol")
         self.assertEqual(sent["reasoning"], {"effort": "low"})
-        self.assertEqual(sent["input"][0]["content"][0]["text"], CANDIDATE["agent_instructions"])
-        self.assertEqual(sent["tools"], [{"type": "web_search"}])
-        self.assertEqual(sent["tool_choice"], "auto")
-        self.assertEqual(sent["max_tool_calls"], 3)
+        self.assertEqual(sent["input"], [{"role": "user", "content": [
+            {"type": "input_text", "text": CANDIDATE["agent_instructions"]},
+            {"type": "input_file", "file_url": CANDIDATE["source_url"]},
+        ]}])
+        for field in ("tools", "tool_choice", "max_tool_calls"):
+            self.assertNotIn(field, sent)
         self.assertEqual(sent["text"]["format"], {"type": "json_schema", "name": "menu_online_transcription",
                                                  "strict": True, "schema": shared.MENU_TRANSCRIPTION_SCHEMA})
         self.assertEqual(sent["max_output_tokens"], 8000)
@@ -121,11 +123,52 @@ class OnlineTranscriptionTests(_SearchCase):
                 key: value for key, value in CANDIDATE.items() if key != field}}))
         self.assert_no_calls()
 
+    def test_direct_file_routing_uses_path_extension_and_preserves_complete_url(self):
+        for extension in ("pdf", "PdF", "jpg", "JpG", "jpeg", "JpEg", "png", "PnG", "webp", "WeBp"):
+            with self.subTest(extension=extension):
+                source = (f"https://WWW.Example.COM:8443/menus/dinner%20menu.{extension}"
+                          "?signature=A%2FB%2BC+1&download=other.html#page=2")
+                menu = {**CANDIDATE, "source_url": source, "agent_instructions": "Read the selected menu. " + PRIVATE}
+                before = len(self.requests["OPENAI"])
+                response, data = self.invoke(event_for({"query": QUERY, "menu": menu}))
+                self.assertEqual(response["statusCode"], 200, data)
+                self.assertEqual(data, {"isDummy": False, "restaurantName": MENU["restaurantName"],
+                                        "sections": MENU["sections"]})
+                self.assertEqual(len(self.requests["OPENAI"]), before + 1)
+                request = self.requests["OPENAI"][-1]
+                self.assertEqual(request.method, "POST")
+                self.assertEqual(str(request.url), "https://api.openai.com/v1/responses")
+                sent = json.loads(request.content)
+                attachment = ({"type": "input_file", "file_url": source} if extension.lower() == "pdf" else
+                              {"type": "input_image", "image_url": source, "detail": "high"})
+                self.assertEqual(sent["input"], [{"role": "user", "content": [
+                    {"type": "input_text", "text": menu["agent_instructions"]}, attachment,
+                ]}])
+                for field in ("tools", "tool_choice", "max_tool_calls"):
+                    self.assertNotIn(field, sent)
+                self.assertEqual(sent["model"], openai_provider.ONLINE_TRANSCRIPTION_MODEL)
+                self.assertEqual(sent["reasoning"], {"effort": openai_provider.ONLINE_TRANSCRIPTION_REASONING_EFFORT})
+                self.assertEqual(sent["service_tier"], openai_provider.ONLINE_TRANSCRIPTION_SERVICE_TIER)
+                self.assertEqual(sent["instructions"], shared.MENU_ONLINE_TRANSCRIPTION_PROMPT)
+                self.assertEqual(sent["text"]["format"], {"type": "json_schema", "name": "menu_online_transcription",
+                                                         "strict": True, "schema": shared.MENU_TRANSCRIPTION_SCHEMA})
+                self.assertEqual(sent["max_output_tokens"], 8000)
+                self.assertIs(sent["store"], False)
+                self.assertEqual(self.openai.call_args.kwargs["max_retries"], 0)
+                self.assertEqual(self.openai.call_args.kwargs["timeout"], 30)
+                self.assertNotIn(PRIVATE, response["body"] + str(self.log.mock_calls))
+
     def test_online_web_search_is_unrestricted_and_uses_only_instructions(self):
         for source in (
-            "https://venue.example.com/menu.pdf",
-            "https://WWW.Example.COM:8443/menu.pdf?next=https://other.example/#menu",
+            "https://venue.example.com/menu.html",
+            "https://WWW.Example.COM:8443/menu?next=https://other.example/menu.pdf#menu.jpg",
             "http://menus.venue.co.uk/dinner",
+            "https://venue.example.com",
+            "https://venue.example.com/menu.gif",
+            "https://venue.example.com/menu.pdf/",
+            "https://venue.example.com/menu.pdf.html",
+            "https://venue.example.com/menu?download=menu.png",
+            "https://venue.example.com/menu#menu.webp",
         ):
             with self.subTest(source=source):
                 response, data = self.invoke(event_for({"query": QUERY, "menu": {
@@ -135,7 +178,11 @@ class OnlineTranscriptionTests(_SearchCase):
                 self.assertEqual(response["statusCode"], 200, data)
                 sent = json.loads(self.requests["OPENAI"][-1].content)
                 self.assertEqual(sent["tools"], [{"type": "web_search"}])
-                self.assertEqual(sent["input"][0]["content"][0]["text"], "Read https://unrelated.example/menu.pdf")
+                self.assertEqual(sent["tool_choice"], "auto")
+                self.assertEqual(sent["max_tool_calls"], 3)
+                self.assertEqual(sent["input"], [{"role": "user", "content": [
+                    {"type": "input_text", "text": "Read https://unrelated.example/menu.pdf"},
+                ]}])
 
     def test_missing_source_hostname_is_rejected_before_provider_call(self):
         for source in ("", "not a URL", "/menu.pdf", "https://", "https://[bad-host/menu", "javascript:alert(1)"):
@@ -215,6 +262,47 @@ class OnlineTranscriptionTests(_SearchCase):
         self.assert_error(502, "openai_unavailable")
         self.network_error = httpx.ReadTimeout(PRIVATE)
         self.assert_error(504, "openai_timeout")
+
+    def test_direct_file_http_retrieval_failures_are_safe_without_retry_or_fallback(self):
+        for extension, upstream_code, status, code in (
+            ("pdf", "invalid_request_error", 502, "openai_failure"),
+            ("pdf", "invalid_file", 502, "openai_failure"),
+            ("jpg", "failed_to_download_image", 502, "openai_failure"),
+            ("jpeg", "invalid_image_url", 502, "openai_failure"),
+            ("png", "image_file_not_found", 502, "openai_failure"),
+            ("webp", "invalid_image_format", 400, "invalid_image"),
+        ):
+            with self.subTest(extension=extension, upstream_code=upstream_code):
+                source = f"https://venue.example.com/menu.{extension}?signature={PRIVATE}"
+                self.status = 400
+                self.error_body = {"error": {"code": upstream_code, "message": f"Cannot read {source}"}}
+                before = len(self.requests["OPENAI"])
+                self.assert_error(status, code, event_for({"query": QUERY, "menu": {
+                    **CANDIDATE, "source_url": source}}))
+                self.assertEqual(len(self.requests["OPENAI"]), before + 1)
+                self.assertEqual(self.openai.call_args.kwargs["max_retries"], 0)
+                self.anthropic.assert_not_called()
+
+    def test_direct_file_failed_responses_are_safe_without_fallback(self):
+        for extension, code in (("pdf", "server_error"), ("png", "failed_to_download_image")):
+            with self.subTest(extension=extension):
+                self.openai_body = image_tests.MenuHandlerTests.response(MENU)
+                self.openai_body.update(status="failed", output=[], error={"code": code, "message": PRIVATE})
+                before = len(self.requests["OPENAI"])
+                self.assert_error(502, "invalid_openai_response", event_for({"query": QUERY, "menu": {
+                    **CANDIDATE, "source_url": f"https://venue.example.com/menu.{extension}"}}))
+                self.assertEqual(len(self.requests["OPENAI"]), before + 1)
+
+    def test_unavailable_and_unreadable_files_keep_recoverable_menu_errors(self):
+        for extension in ("pdf", "jpg", "jpeg", "png", "webp"):
+            for status, code in (("no_menu", "no_menu_found"), ("illegible_text", "illegible_text")):
+                with self.subTest(extension=extension, status=status):
+                    self.openai_body = image_tests.MenuHandlerTests.response({**MENU, "status": status})
+                    before = len(self.requests["OPENAI"])
+                    _, data = self.assert_error(422, code, event_for({"query": QUERY, "menu": {
+                        **CANDIDATE, "source_url": f"https://venue.example.com/menu.{extension}"}}))
+                    self.assertIn("Try another match", data["error"]["message"])
+                    self.assertEqual(len(self.requests["OPENAI"]), before + 1)
 
     def test_total_deadline_and_remaining_lambda_budget(self):
         context = Mock()
