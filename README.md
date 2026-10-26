@@ -1,9 +1,10 @@
-# Menu API v1.3.0
+# Menu API v2.1.0
 
 Python Lambda behind API Gateway. `POST /menu_image_transcribe` transcribes menu
 photos through OpenAI or Anthropic. `POST /menu_online_search` finds possible
 menus on the web through OpenAI. `POST /menu_online_transcribe` reads a selected
 online menu into the same JSON as image transcription.
+Menus can also be saved to DynamoDB for sharing.
 See [API_REQUIREMENTS.md](API_REQUIREMENTS.md) for the contract.
 
 ## Local development
@@ -26,6 +27,36 @@ curl http://127.0.0.1:8000/menu_image_transcribe -H 'Content-Type: application/j
 ```
 
 Run offline tests with `python -m unittest discover -s tests -v`.
+
+## Shared menus — v2.1.0
+
+- `POST /transcribed_menu` accepts the app's menu JSON (`restaurantName`, `sections`)
+  as `application/json`, up to **300,000 UTF-8 bytes**. HTTP **201** returns
+  `{"menu_id":"rP_KAcJggGmj1w"}`: a random, case-sensitive, 14-character URL-safe ID.
+- `GET /transcribed_menu/<menu_id>` returns HTTP **200** with the saved menu JSON
+  plus top-level `sharedMenuId`, or **404** if absent. Empty sections and blank headings are preserved.
+- POST only when sharing, then reuse the ID. Records cannot be edited, deleted,
+  or expired; renames/deletes remain local. Transcription does not save menus.
+- Sharing is public and independent of provider keys and live-operation flags.
+  Do not upload sensitive information. Errors use the standard API envelope.
+
+### Local DynamoDB access and permissions
+
+The dev server uses real AWS DynamoDB. Prefer a separate development table with a
+string partition key `menu_id`, no sort key, and **1 RCU / 1 WCU**.
+
+1. Have an administrator grant your developer role/profile `dynamodb:GetItem` and
+   `dynamodb:PutItem` on the chosen table ARN—not just the Lambda execution role.
+2. Authenticate with AWS CLI/SSO, then set `DYNAMO_TABLE`, `AWS_DEFAULT_REGION`, and
+   optionally `AWS_PROFILE` using [.env.example](.env.example). The stack outputs
+   `TranscribedMenuTableName` and `TranscribedMenuTableArn` identify production.
+3. Use the same POST/GET routes on http://127.0.0.1:8000. Local writes are permanent;
+   offline tests never contact AWS.
+
+The stack retains the table and uses fixed **1 RCU / 1 WCU**, without autoscaling.
+Free-tier allowances are shared with other tables; storage and other AWS charges
+can still apply. Monitor capacity and storage; public sharing is not protected by
+the paid-operation flags or by CORS.
 
 ## Configuration and releases
 
@@ -57,6 +88,21 @@ Run offline tests with `python -m unittest discover -s tests -v`.
   Linux/Python 3.13 x86_64 dependencies, not macOS wheels.
 - CloudFormation owns infrastructure/configuration; the pipeline owns application code.
   Do not overlap stack and code deployments. Rerun the pipeline after Lambda replacement.
+
+### Release checklist
+
+1. Install development dependencies, run the complete offline test suite, and audit
+  [requirements.txt](requirements.txt) for known vulnerabilities.
+2. Include every Lambda module, including [lambda/transcribed_menu.py](lambda/transcribed_menu.py),
+  its tests, and the dummy-menu fixture in the release commit. Never commit local
+  dotenv files, credentials, virtual environments, or deployment packages.
+3. Deploy the v2.1 CloudFormation routes, DynamoDB table, scoped IAM permissions,
+  and `DYNAMO_TABLE` configuration first; wait for the stack update to complete.
+4. Release the API and wait for Lambda's code update. Verify dummy transcription,
+  all five routes and preflights, and sharing POST/GET before releasing the frontend.
+  Sharing smoke tests create permanent records; use a harmless menu.
+5. Verify provider/model/tool access with representative live requests before
+  enabling public paid usage. Offline tests do not verify AWS access or providers.
 
 ## Web search contract
 

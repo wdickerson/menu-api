@@ -67,3 +67,20 @@
 	three seconds; image transcription and search retain 20-second deadlines.
 - Cover URL routing, OpenAI request payloads, and retrieval failures with offline tests.
 
+# Menu API requirements — v2.1.0
+
+Introduce two new endpoints
+
+POST /transcribed_menu
+GET /transcribed_menu/<menu_id>
+
+The POST accepts the JSON of a transcribed menu (same format as used by the app), saves it to DynamoDB, and returns a short ID. The ID should be randomly generated and usable in a URL, for example "rP_KAcJggGmj1w", "mfEQ80qbbkDBTg", or "tdZ2eNsUPdxTQA"
+
+The GET returns the JSON of the transcribed menu with that ID, including a top-level
+`sharedMenuId` field containing the requested menu ID for frontend persistence.
+
+Deleting and editing is not supported.
+
+Add necessary variables to .env.example (such as dynamodb identifiers).
+
+The dev server should also be able to write and read from DynamoDB, so include instructions on how to grant the dev server the necessary AWS permissions

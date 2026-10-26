@@ -1,4 +1,4 @@
-"""Menu API v1.2.0, exposed as an API Gateway REST proxy."""
+"""Menu API v2.1.0, exposed as an API Gateway REST proxy."""
 
 import base64
 import binascii
@@ -15,6 +15,7 @@ from providers.shared import ApiError, ImageMediaType, MenuImage
 from python_multipart import MultipartParser
 from python_multipart.exceptions import MultipartParseError
 from python_multipart.multipart import parse_options_header
+import transcribed_menu
 
 
 # Lambda's synchronous event limit is 6 MiB (6,291,456 bytes). A 4,600,000-byte
@@ -276,10 +277,23 @@ def lambda_handler(event, context):
         return {"statusCode": status_code, "headers": headers, "body": json.dumps(payload)}
 
     try:
+        path = event.get("resource") or event.get("path")
+        if path == "/transcribed_menu" or (isinstance(path, str) and path.startswith("/transcribed_menu/")):
+            is_item = path != "/transcribed_menu"
+            method = "GET" if is_item else "POST"
+            headers["Access-Control-Allow-Methods"] = f"{method},OPTIONS"
+            if event.get("httpMethod") != method:
+                headers["Allow"] = f"{method},OPTIONS"
+                raise ApiError(405, "method_not_allowed", f"Method not allowed. Use {method}.")
+            if is_item:
+                menu_id = ((event.get("pathParameters") or {}).get("menu_id")
+                           if path == "/transcribed_menu/{menu_id}" else path[len("/transcribed_menu/"):])
+                return response(200, transcribed_menu.get_menu(menu_id))
+            menu = parse_json_payload(event, transcribed_menu.MAX_SHARED_MENU_BYTES)
+            return response(201, transcribed_menu.create_menu(menu))
         if event.get("httpMethod") != "POST":
             headers["Allow"] = "POST,OPTIONS"
             raise ApiError(405, "method_not_allowed", "Method not allowed. Use POST.")
-        path = event.get("resource") or event.get("path")
         if path == "/menu_online_transcribe":
             query, menu = parse_online_transcription_payload(event)
             if os.environ.get("ENABLE_LIVE_TRANSCRIPTION", "false").lower() != "true":

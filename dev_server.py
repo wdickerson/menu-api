@@ -52,10 +52,17 @@ def create_app(*, load_environment: bool = True) -> Flask:
                provide_automatic_options=False)
     @app.route("/menu_online_transcribe", methods=["POST", "OPTIONS", "GET", "HEAD", "PUT", "PATCH", "DELETE"],
                provide_automatic_options=False)
-    def menu_operation() -> Response:
+    @app.route("/transcribed_menu", methods=["POST", "OPTIONS", "GET", "HEAD", "PUT", "PATCH", "DELETE"],
+               provide_automatic_options=False)
+    @app.route("/transcribed_menu/<menu_id>", methods=["POST", "OPTIONS", "GET", "HEAD", "PUT", "PATCH", "DELETE"],
+               provide_automatic_options=False)
+    def menu_operation(menu_id: str | None = None) -> Response:
         if request.method == "OPTIONS":
             # API Gateway owns preflight in production; emulate it only locally.
-            return Response(status=204, headers=CORS_HEADERS)
+            headers = {**CORS_HEADERS}
+            if menu_id is not None:
+                headers["Access-Control-Allow-Methods"] = "GET,OPTIONS"
+            return Response(status=204, headers=headers)
         # Never parse form fields here: Lambda must enforce the same multipart
         # contract and see exactly the original image bytes, including non-UTF-8.
         raw = request.stream.read(handler.MAX_BODY_BYTES + 1) if request.method == "POST" else b""
@@ -64,6 +71,8 @@ def create_app(*, load_environment: bool = True) -> Flask:
         event = {
             "httpMethod": request.method,
             "path": request.path,
+            "resource": "/transcribed_menu/{menu_id}" if menu_id is not None else request.path,
+            "pathParameters": {"menu_id": menu_id} if menu_id is not None else None,
             "headers": dict(request.headers),
             "multiValueHeaders": {key: request.headers.getlist(key) for key in request.headers.keys()},
             "body": base64.b64encode(raw).decode("ascii"),
